@@ -1,0 +1,14 @@
+deepface>=0.0.93
+retina-face>=0.0.17
+tf-keras>=2.15.0
+tensorflow>=2.15.0
+opencv-python>=4.8.0
+numpy<2.0
+Pillow>=10.0
+faiss-cpu>=1.7.0
+torch>=2.0
+autopep8>=2.0
+transformers>=4.30.0
+fastapi>=0.100.0
+uvicorn>=0.20.0
+python-multipart>=0.0.5
