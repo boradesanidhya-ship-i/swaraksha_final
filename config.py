@@ -26,11 +26,11 @@ MATCH_THRESHOLD = 0.55              # Cosine similarity: above this = match
 FACE_CONFIDENCE_MIN = 0.80          # Minimum face detection confidence
 
 # === Video Processing ===
-VIDEO_SAMPLE_FPS = 2                # Frames per second to sample
+VIDEO_SAMPLE_INTERVAL = 2.0         # Seconds between frame samples
 
 # AI Image Detector Settings
 AI_DETECTOR_MODEL = 'dima806/deepfake_vs_real_image_detection'
-AI_DETECTOR_THRESHOLD = 0.5         # Above this = classified as AI-generated
+AI_DETECTOR_THRESHOLD = 0.85        # Increased threshold to reduce false positives
 
 # === FAISS Index ===
 FAISS_INDEX_PATH = os.path.join(STORAGE_DIR, "faiss_index.bin")

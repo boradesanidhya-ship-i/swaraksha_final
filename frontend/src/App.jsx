@@ -96,9 +96,9 @@ function App() {
   const scanVideo = async (event) => {
     event.preventDefault(); if (!videoFiles.length || isVideoScanning) return;
     setIsVideoScanning(true); setVideoResults([]); setProgress({ label: 'Uploading videos', value: 15 }); log(`Video queue started: ${videoFiles.length} file(s).`);
-    const progressTimer = setInterval(() => setProgress((current) => current && current.value < 90 ? { label: current.value < 40 ? 'Extracting video frames' : current.value < 70 ? 'Detecting faces in frames' : 'Checking identity and authenticity', value: current.value + 4 } : current), 1100);
+    const progressTimer = setInterval(() => setProgress((current) => current && current.value < 90 ? { label: current.value < 30 ? 'Extracting video frames' : current.value < 50 ? 'Detecting faces & matching identities' : 'Running AI manipulation analysis', value: current.value + 4 } : current), 1100);
     try { for (const file of videoFiles) { log(`Sampling frames: ${file.name}`); const formData = new FormData(); formData.append('file', file); const response = await axios.post(`${API_BASE}/scan-video`, formData); setVideoResults((current) => [...current, { fileName: file.name, ...response.data }]); } setProgress({ label: 'Video queue complete', value: 100 }); log('Video queue complete.'); }
-    catch (error) { setVideoResults((current) => [...current, { fileName: 'Upload error', overall_action: 'ERROR', summary: error.response?.data?.detail || 'The backend could not analyze this video.' }]); }
+    catch (error) { setVideoResults((current) => [...current, { fileName: 'Upload error', final_status: 'ERROR', summary: error.response?.data?.detail || 'The backend could not analyze this video.' }]); }
     finally { clearInterval(progressTimer); setIsVideoScanning(false); setTimeout(() => setProgress(null), 900); }
   };
 
@@ -128,9 +128,96 @@ function ReferenceScreen({ referenceFiles, setReferenceFiles, personId, setPerso
 function ProgressBar({ progress }) { return <div className="progress-dock"><div className="progress-copy"><LoaderCircle className="spin" size={15} /><strong>{progress.label}</strong><span>{progress.value}%</span></div><div className="progress-track"><i style={{ width: `${progress.value}%` }} /></div></div> }
 function ActivityTerminal({ entries }) { return <section className="activity-terminal"><div><span className="terminal-dot red" /><span className="terminal-dot yellow" /><span className="terminal-dot green" /><strong>SWARAKSHA process</strong></div>{entries.map((entry, index) => <p key={`${entry}-${index}`}>{entry}</p>)}</section> }
 function DirectoryScreen({ persons, recentAdds, onDelete, onReference, goHome }) { return <section className="work-screen directory-screen"><BackButton onClick={goHome} /><div className="work-heading"><span className="kicker">Protected directory</span><h2>Registered identities</h2><p>Manage the people currently available to match during scans.</p></div><div className="directory-card">{persons.length ? persons.map((person) => <div className="directory-row" key={person.person_id}><span className="directory-avatar"><UserRound size={18} /></span><span><strong>{person.name}</strong><small>{person.person_id} · {recentAdds[person.person_id] || person.image_count || 0} added this enrollment · {person.image_count || 0} total stored</small></span><Check size={17} /><button className="delete-person" title={`Delete ${person.name}`} onClick={() => onDelete(person.person_id)}><Trash2 size={16} /></button></div>) : <div className="directory-empty"><Users size={27} /><strong>No identities registered yet</strong><p>Add reference images to create the first protected profile.</p><button className="button primary" onClick={onReference}><ImagePlus size={15} /> Add reference images</button></div>}</div></section> }
-function VideoScreen({ videoFiles, setVideoFiles, videoResults, scanVideo, isVideoScanning, goHome }) { const addVideos = (files) => setVideoFiles((current) => [...current, ...[...files].filter((file) => file.type.startsWith('video/'))]); return <section className="work-screen video-screen"><BackButton onClick={goHome} /><div className="work-heading"><span className="kicker">Video protection scan</span><h2>Video lab</h2><p>Queue multiple videos and compare their sampled-frame results in one run.</p></div><div className="video-layout"><form className="reference-form" onSubmit={scanVideo}><label className="video-drop"><FileVideo size={30} /><strong>Choose one or more videos</strong><span>MP4, MOV, AVI · files are sampled automatically</span><input type="file" accept="video/*" multiple onChange={(event) => addVideos(event.target.files)} /></label>{videoFiles.length > 0 && <div className="video-queue">{videoFiles.map((file, index) => <div key={`${file.name}-${index}`}><FileVideo size={14} /><span>{file.name}</span><button type="button" onClick={() => setVideoFiles(videoFiles.filter((_, fileIndex) => fileIndex !== index))}><X size={14} /></button></div>)}</div>}<button className="button primary submit-reference" disabled={!videoFiles.length || isVideoScanning}>{isVideoScanning ? <LoaderCircle className="spin" size={16} /> : <Shield size={16} />}{isVideoScanning ? 'Checking queue...' : `Check ${videoFiles.length} video${videoFiles.length === 1 ? '' : 's'}`}</button></form><div className="video-results">{videoResults.length ? videoResults.map((result, index) => <article className="video-result-card" key={`${result.fileName}-${index}`}><div className="video-result-heading"><FileVideo size={16} /><strong>{result.fileName}</strong><span className={result.overall_action === 'BLOCK' ? 'bad-text' : 'good-text'}>{result.overall_action}</span></div><p>{result.summary}</p><small>{result.frames_sampled || 0} frames sampled · {result.frames_with_faces || 0} frames with faces · {result.blocked_frames || 0} blocked</small></article>) : <div className="directory-card directory-empty"><FileVideo size={27} /><strong>Results will appear here</strong><p>Each queued video gets its own summary after processing.</p></div>}</div></div></section> }
+function VideoScreen({ videoFiles, setVideoFiles, videoResults, scanVideo, isVideoScanning, goHome }) { const addVideos = (files) => setVideoFiles((current) => [...current, ...[...files].filter((file) => file.type.startsWith('video/'))]); return <section className="work-screen video-screen"><BackButton onClick={goHome} /><div className="work-heading"><span className="kicker">Video protection scan</span><h2>Video lab</h2><p>Queue multiple videos and compare their sampled-frame results in one run.</p></div><div className="video-layout"><form className="reference-form" onSubmit={scanVideo}><label className="video-drop"><FileVideo size={30} /><strong>Choose one or more videos</strong><span>MP4, MOV, AVI · files are sampled automatically</span><input type="file" accept="video/*" multiple onChange={(event) => addVideos(event.target.files)} /></label>{videoFiles.length > 0 && <div className="video-queue">{videoFiles.map((file, index) => <div key={`${file.name}-${index}`}><FileVideo size={14} /><span>{file.name}</span><button type="button" onClick={() => setVideoFiles(videoFiles.filter((_, fileIndex) => fileIndex !== index))}><X size={14} /></button></div>)}</div>}<button className="button primary submit-reference" disabled={!videoFiles.length || isVideoScanning}>{isVideoScanning ? <LoaderCircle className="spin" size={16} /> : <Shield size={16} />}{isVideoScanning ? 'Checking queue...' : `Check ${videoFiles.length} video${videoFiles.length === 1 ? '' : 's'}`}</button></form><div className="video-results">{videoResults.length ? videoResults.map((result, index) => <VideoResultCard key={`${result.fileName}-${index}`} result={result} />) : <div className="directory-card directory-empty"><FileVideo size={27} /><strong>Results will appear here</strong><p>Each queued video gets its own summary after processing.</p></div>}</div></div></section> }
+
+function VideoResultCard({ result }) {
+  if (result.final_status === 'ERROR' || !result.video) {
+    return <article className="video-result-card error"><div className="video-result-heading"><FileVideo size={16} /><strong>{result.fileName}</strong><span className="bad-text">ERROR</span></div><p>{result.summary}</p></article>;
+  }
+  const { video, identity, ai_analysis, final_status, frames, summary } = result;
+  const isDanger = final_status === 'POTENTIAL_AI_MANIPULATION';
+  const personNames = identity.person_ids.length ? identity.person_ids.join(', ') : 'None';
+  return (
+    <article className="video-result-card">
+      <div className="video-result-heading">
+        <FileVideo size={16} /><strong>{result.fileName}</strong>
+        <span className={isDanger ? 'bad-text' : 'good-text'}>{final_status.replace(/_/g, ' ')}</span>
+      </div>
+      <p style={{marginBottom: "12px"}}>{summary}</p>
+      <div className="video-stats-grid">
+        <div className="stat-row"><span>Protected Identity:</span> <strong>{personNames}</strong></div>
+        <div className="stat-row"><span>Identity Match:</span> <strong>{identity.protected_identity_detected ? `${Math.round(identity.identity_frame_ratio*100)}% of frames` : 'No'}</strong></div>
+        <div className="stat-row"><span>Identity Frames:</span> <strong>{identity.frames_with_identity} / {video.sampled_frames}</strong></div>
+        <div className="stat-row"><span>AI analysis:</span> <strong>{ai_analysis.frames_flagged} / {ai_analysis.frames_analyzed} suspicious</strong></div>
+      </div>
+      <div className="video-overall" style={{ borderLeftColor: isDanger ? '#d32f2f' : '#6b4c9a' }}>
+        <strong>Overall:</strong> <span className={isDanger ? 'bad-text' : 'good-text'}>{isDanger ? '⚠ POTENTIAL AI MANIPULATION' : '✅ NO THREAT DETECTED'}</span>
+        <br/><small>Consent: {final_status.replace(/_/g, ' ')}</small>
+      </div>
+      <div className="timeline-container">
+        <p className="timeline-label">Frame Timeline</p>
+        <div className="timeline-track">
+          {frames && frames.map((f, i) => {
+            let dotClass = "dot-none";
+            let title = `Frame ${f.frame_number} (${f.timestamp}s): No protected identity`;
+            if (f.protected_identity_detected) {
+               if (f.ai_analysis && f.ai_analysis.result === 'AI_GENERATED') {
+                  dotClass = "dot-danger"; title = `Frame ${f.frame_number} (${f.timestamp}s): Manipulated! (Score: ${f.ai_analysis.score})`;
+               } else {
+                  dotClass = "dot-safe"; title = `Frame ${f.frame_number} (${f.timestamp}s): Protected identity, Real`;
+               }
+            }
+            return <div key={i} className={`timeline-dot ${dotClass}`} title={title}></div>
+          })}
+        </div>
+      </div>
+      {result.metadata_forensics && <VideoMetadataPanel meta={result.metadata_forensics} />}
+    </article>
+  );
+}
+
+function VideoMetadataPanel({ meta }) {
+  if (!meta || (!meta.flags?.length && meta.confidence === 'none')) return null;
+  const isWarning = meta.confidence === 'high' || meta.confidence === 'medium';
+  return (
+    <div className={`metadata-panel ${isWarning ? 'metadata-warning' : 'metadata-clean'}`}>
+      <div className="metadata-header">
+        <strong>🗂️ File Metadata Forensics</strong>
+        <span className={isWarning ? 'bad-text' : 'good-text'}>{meta.confidence.toUpperCase()}</span>
+      </div>
+      {meta.flags && meta.flags.length > 0 ? (
+        <ul className="metadata-flags">
+          {meta.flags.map((flag, i) => <li key={i}>{flag}</li>)}
+        </ul>
+      ) : (
+        <p className="metadata-clean-msg">No AI metadata markers detected in video file.</p>
+      )}
+    </div>
+  );
+}
 
 function BackButton({ onClick }) { return <button className="back-button" onClick={onClick}><ArrowLeft size={16} /> Back</button> }
-function Result({ result }) { const error = result.overall_action === 'ERROR'; const blocked = result.overall_action === 'BLOCK'; return <div className="scan-result"><div className={`verdict ${error ? 'error' : blocked ? 'blocked' : 'cleared'}`}>{error ? <ShieldAlert size={21} /> : blocked ? <ShieldAlert size={21} /> : <Check size={21} />}<div><small>{error ? 'Connection problem' : blocked ? 'Action required' : 'Protection check complete'}</small><strong>{error ? 'Could not analyze' : blocked ? 'Potential manipulation found' : 'No threat detected'}</strong></div></div><p>{result.summary}</p>{!error && <div className="result-stats"><span><b>{result.faces_detected}</b> faces detected</span><span><b>{result.results?.filter((item) => item.name).length || 0}</b> identities matched</span></div>}{result.results?.map((item, index) => <div className="face-result" key={index}><span className={item.action === 'BLOCK' ? 'bad' : 'good'}>{item.action === 'BLOCK' ? <ShieldAlert size={14} /> : <Check size={14} />}</span><div><strong>{item.name || 'Unknown face'}</strong><small>{item.reason}</small></div></div>)}</div> }
+function Result({ result }) { const error = result.overall_action === 'ERROR'; const blocked = result.overall_action === 'BLOCK'; const meta = result.metadata_forensics; return <div className="scan-result"><div className={`verdict ${error ? 'error' : blocked ? 'blocked' : 'cleared'}`}>{error ? <ShieldAlert size={21} /> : blocked ? <ShieldAlert size={21} /> : <Check size={21} />}<div><small>{error ? 'Connection problem' : blocked ? 'Action required' : 'Protection check complete'}</small><strong>{error ? 'Could not analyze' : blocked ? 'Potential manipulation found' : 'No threat detected'}</strong></div></div><p>{result.summary}</p>{!error && <div className="result-stats"><span><b>{result.faces_detected}</b> faces detected</span><span><b>{result.results?.filter((item) => item.name).length || 0}</b> identities matched</span></div>}{result.results?.map((item, index) => <div className="face-result" key={index}><span className={item.action === 'BLOCK' ? 'bad' : 'good'}>{item.action === 'BLOCK' ? <ShieldAlert size={14} /> : <Check size={14} />}</span><div><strong>{item.name || 'Unknown face'}</strong><small>{item.reason}</small></div></div>)}{meta && <MetadataPanel meta={meta} />}</div> }
+
+
+function MetadataPanel({ meta }) {
+  if (!meta || (!meta.flags?.length && meta.confidence === 'none')) return null;
+  const isWarning = meta.confidence === 'high' || meta.confidence === 'medium';
+  return (
+    <div className={`metadata-panel ${isWarning ? 'metadata-warning' : 'metadata-clean'}`}>
+      <div className="metadata-header">
+        <strong>🗂️ Metadata Forensics</strong>
+        <span className={isWarning ? 'bad-text' : 'good-text'}>{meta.confidence.toUpperCase()}</span>
+      </div>
+      {meta.flags && meta.flags.length > 0 ? (
+        <ul className="metadata-flags">
+          {meta.flags.map((flag, i) => <li key={i}>{flag}</li>)}
+        </ul>
+      ) : (
+        <p className="metadata-clean-msg">No AI metadata markers detected in file.</p>
+      )}
+    </div>
+  );
+}
 
 export default App;
