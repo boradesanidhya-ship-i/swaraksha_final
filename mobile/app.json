@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "SWARAKSHA",
+    "slug": "swaraksha-mobile",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon2.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/icon2.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ede9f7"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.swaraksha.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "SWARAKSHA needs camera access to capture face photos for identity verification.",
+        "NSPhotoLibraryUsageDescription": "SWARAKSHA needs photo library access to upload face references and media for deepfake inspection."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon2.png",
+        "backgroundColor": "#ede9f7"
+      },
+      "package": "com.swaraksha.mobile",
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/icon2.png"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "SWARAKSHA requires camera permission for live facial scanning."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "SWARAKSHA requires photo library access to select face references and video files."
+        }
+      ]
+    ]
+  }
+}
