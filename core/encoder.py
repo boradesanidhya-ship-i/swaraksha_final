@@ -93,13 +93,14 @@ def extract_faces(frame: np.ndarray, min_confidence: float = None) -> list:
     return [f for f in faces if f.get("confidence", 0) >= min_confidence]
 
 
-def generate_frame_embeddings(frame: np.ndarray) -> list:
+def generate_frame_embeddings(frame: np.ndarray, min_confidence: float = None) -> list:
     """
-    Combined face extraction + embedding generation for a video frame.
-    Designed for the video processing pipeline.
+    Combined face extraction + embedding generation for an image or video frame.
+    Tries primary detector (retinaface) and falls back to opencv/ssd if no faces found.
 
     Args:
-        frame: BGR numpy array (from OpenCV VideoCapture)
+        frame: BGR numpy array (from OpenCV / imdecode)
+        min_confidence: Minimum detection confidence threshold
 
     Returns:
         List of dicts: [{
@@ -108,38 +109,49 @@ def generate_frame_embeddings(frame: np.ndarray) -> list:
             'confidence': float
         }]
     """
+    if min_confidence is None:
+        min_confidence = getattr(config, 'FACE_CONFIDENCE_MIN', 0.40)
+
     # Convert BGR to RGB
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-    try:
-        results = DeepFace.represent(
-            img_path=rgb_frame,
-            model_name=config.FACE_MODEL,
-            detector_backend=config.DETECTOR_BACKEND,
-            enforce_detection=False,
-            align=True,
-        )
-    except Exception:
-        return []
+    backends_to_try = [config.DETECTOR_BACKEND, "opencv", "ssd"]
 
-    embeddings = []
-    for res in results:
-        conf = res.get("face_confidence", res.get("confidence", 0))
-        if conf < config.FACE_CONFIDENCE_MIN:
+    for backend in backends_to_try:
+        try:
+            results = DeepFace.represent(
+                img_path=rgb_frame,
+                model_name=config.FACE_MODEL,
+                detector_backend=backend,
+                enforce_detection=False,
+                align=True,
+            )
+            if not results:
+                continue
+
+            embeddings = []
+            for res in results:
+                conf = res.get("face_confidence", res.get("confidence", 1.0))
+                if conf < min_confidence:
+                    continue
+
+                emb = np.array(res["embedding"], dtype=np.float32)
+                norm = np.linalg.norm(emb)
+                if norm > 0:
+                    emb = emb / norm
+
+                embeddings.append({
+                    "embedding": emb,
+                    "facial_area": res.get("facial_area", {}),
+                    "confidence": conf,
+                })
+
+            if embeddings:
+                return embeddings
+        except Exception:
             continue
 
-        emb = np.array(res["embedding"], dtype=np.float32)
-        norm = np.linalg.norm(emb)
-        if norm > 0:
-            emb = emb / norm
-
-        embeddings.append({
-            "embedding": emb,
-            "facial_area": res["facial_area"],
-            "confidence": conf,
-        })
-
-    return embeddings
+    return []
 
 
 def preload_models():

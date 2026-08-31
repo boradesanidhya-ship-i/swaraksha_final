@@ -2,13 +2,9 @@
 setlocal
 
 set "ROOT=%~dp0"
-set "PYTHON=C:\Users\Sora\AppData\Local\Programs\Python\Python311\python.exe"
-
+set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
 if not exist "%PYTHON%" (
-    echo Python 3.11 was not found at:
-    echo %PYTHON%
-    pause
-    exit /b 1
+    set "PYTHON=python"
 )
 
 "%PYTHON%" -c "import fastapi, cv2, tensorflow, torch, faiss, deepface, retinaface, tf_keras, transformers" >nul 2>&1
@@ -22,10 +18,12 @@ if errorlevel 1 (
     )
 )
 
-start "SWARAKSHA Backend" /D "%ROOT%" cmd /k ""%PYTHON%" -m uvicorn api.main:app --reload --host 127.0.0.1 --port 8000"
-start "SWARAKSHA Frontend" /D "%ROOT%frontend" cmd /k npm.cmd run dev -- --host 127.0.0.1
+start "SWARAKSHA Backend" /D "%ROOT%" cmd /k ""%PYTHON%" -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000"
+start "SWARAKSHA Frontend" /D "%ROOT%frontend" cmd /k npm.cmd run dev -- --host 0.0.0.0
 
 echo SWARAKSHA v2 started.
-echo Backend:  http://localhost:8000
+echo Backend:  http://localhost:8000 (accessible on LAN for Mobile App)
 echo Frontend: http://localhost:5173
+echo.
+echo To launch the Mobile App in Expo Go, run: mobile\start_mobile.bat
 endlocal

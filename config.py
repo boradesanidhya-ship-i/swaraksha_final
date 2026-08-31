@@ -23,7 +23,7 @@ DISTANCE_METRIC = "cosine"
 
 # === Matching Thresholds ===
 MATCH_THRESHOLD = 0.55              # Cosine similarity: above this = match
-FACE_CONFIDENCE_MIN = 0.80          # Minimum face detection confidence
+FACE_CONFIDENCE_MIN = 0.40          # Minimum face detection confidence (lowered for angled/profile faces)
 
 # === Video Processing ===
 VIDEO_SAMPLE_INTERVAL = 2.0         # Seconds between frame samples

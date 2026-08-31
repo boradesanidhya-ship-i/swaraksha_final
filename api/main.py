@@ -84,6 +84,8 @@ async def startup_event():
 
 # ── Helper ──────────────────────────────────────────────────────────────────
 
+import base64
+
 def _decode_image(contents: bytes) -> np.ndarray:
     """Decode uploaded file bytes into a BGR numpy array."""
     nparr = np.frombuffer(contents, np.uint8)
@@ -92,8 +94,32 @@ def _decode_image(contents: bytes) -> np.ndarray:
         raise HTTPException(status_code=400, detail="Invalid image file — could not decode.")
     return img
 
+def _decode_base64_image(b64_str: str):
+    """Decode base64 string into raw bytes and OpenCV BGR image."""
+    if "," in b64_str:
+        b64_str = b64_str.split(",", 1)[1]
+    raw_bytes = base64.b64decode(b64_str)
+    img = _decode_image(raw_bytes)
+    return raw_bytes, img
 
-# ── Response Models ─────────────────────────────────────────────────────────
+
+# ── Response & Request Models ───────────────────────────────────────────────
+
+class RegisterBase64Request(BaseModel):
+    person_id: str
+    name: str
+    images: List[str]
+
+
+class ScanBase64Request(BaseModel):
+    image: str
+    filename: Optional[str] = "scan.jpg"
+
+
+class ScanVideoBase64Request(BaseModel):
+    video: str
+    filename: Optional[str] = "upload.mp4"
+
 
 class PersonResponse(BaseModel):
     person_id: str
@@ -252,6 +278,50 @@ async def register_person(
         message=f"Successfully registered {faces_registered} face(s) for '{name}'.",
         person_id=person_id,
         name=name,
+        faces_registered=faces_registered,
+        total_embeddings=face_index.total_embeddings,
+    )
+
+
+@app.post("/api/register-base64", response_model=RegisterResponse)
+async def register_person_base64(req: RegisterBase64Request):
+    """
+    Register a person's identity via JSON base64 payloads (ideal for mobile clients).
+    """
+    if not req.images:
+        raise HTTPException(status_code=400, detail="At least one image is required.")
+
+    try:
+        db.add_person(req.person_id, req.name)
+    except ValueError:
+        pass
+
+    faces_registered = 0
+    for idx, b64_img in enumerate(req.images):
+        try:
+            _, img = _decode_base64_image(b64_img)
+            faces = generate_frame_embeddings(img)
+            if not faces:
+                continue
+
+            emb = faces[0]["embedding"]
+            image_name = f"reference_{idx + 1}.jpg"
+            face_index.add(req.person_id, emb, image_name)
+            faces_registered += 1
+        except Exception as e:
+            print(f"[REGISTER] Error decoding base64 image {idx}: {e}")
+            continue
+
+    if faces_registered == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No faces could be detected in any uploaded images.",
+        )
+
+    return RegisterResponse(
+        message=f"Successfully registered {faces_registered} face(s) for '{req.name}'.",
+        person_id=req.person_id,
+        name=req.name,
         faces_registered=faces_registered,
         total_embeddings=face_index.total_embeddings,
     )
@@ -421,13 +491,230 @@ async def scan_image(file: UploadFile = File(...)):
     return result
 
 
+@app.post("/api/scan-base64", response_model=ScanResponse)
+async def scan_image_base64(req: ScanBase64Request):
+    """Scan base64 image for protected identities and AI manipulation."""
+    contents, img = _decode_base64_image(req.image)
+    result = _scan_frame(img)
+
+    try:
+        meta_result = metadata_analyzer.analyze_image_bytes(contents, filename=req.filename or "image.jpg")
+        result.metadata_forensics = meta_result
+
+        if meta_result['confidence'] == 'high' and result.overall_action == 'ALLOW':
+            has_protected = any(r.person_id for r in result.results)
+            if has_protected:
+                result.overall_action = 'BLOCK'
+                result.summary += " ⚠️ Metadata forensics detected strong AI-generation markers."
+    except Exception as e:
+        print(f"[METADATA] Error during base64 metadata analysis: {e}")
+
+    return result
+
+
+def _process_video_file(temp_path: str, filename: str) -> VideoScanDetailedResponse:
+    print(f"[VIDEO] Received video: {filename}")
+    
+    # 0. Metadata Forensics on the video file
+    video_meta_forensics = None
+    try:
+        video_meta_forensics = metadata_analyzer.analyze_video_file(temp_path)
+        print(f"[METADATA] Video scan: {video_meta_forensics['confidence']} confidence, {len(video_meta_forensics['flags'])} flag(s)")
+        for flag in video_meta_forensics['flags']:
+            print(f"  → {flag}")
+    except Exception as e:
+        print(f"[METADATA] Error during video metadata analysis: {e}")
+
+    # 1. Video Metadata
+    try:
+        metadata = extract_video_metadata(temp_path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid or corrupted video: {e}")
+        
+    print(f"[VIDEO] Duration: {metadata['duration']} sec, FPS: {metadata['fps']}")
+    
+    sample_interval = getattr(config, 'VIDEO_SAMPLE_INTERVAL', 2.0)
+    print(f"[VIDEO] Sampling every {sample_interval} sec")
+
+    # 2. Extract Sampled Frames
+    sampled_frames = list(sample_video_frames(temp_path, sample_interval))
+    print(f"[VIDEO] Sampled {len(sampled_frames)} frames")
+
+    frames_results = []
+    relevant_frames = [] # Tuples of (frame_result, list of protected face crops)
+    person_ids_detected = set()
+
+    # 3. Face Detection & Identity Matching (Layer 1)
+    for frame_data in sampled_frames:
+        frame_num = frame_data["frame_number"]
+        timestamp = frame_data["timestamp"]
+        frame_img = frame_data["frame"]
+        
+        # Detect faces
+        faces = generate_frame_embeddings(frame_img)
+        print(f"[FACE] Frame {frame_num}: {len(faces)} faces")
+        
+        identity_matches = []
+        protected_detected = False
+        protected_face_crops = []
+        
+        if faces:
+            for face in faces:
+                emb = face["embedding"]
+                area = face["facial_area"]
+                search_results = face_index.search(emb, k=1)
+                
+                if search_results:
+                    best = search_results[0]
+                    sim = best["similarity"]
+                    pid = best["person_id"]
+                    
+                    identity_matches.append(VideoFrameIdentityMatch(
+                        person_id=pid,
+                        similarity=round(sim, 4)
+                    ))
+                    
+                    protected_detected = True
+                    person_ids_detected.add(pid)
+                    print(f"[IDENTITY] Frame {frame_num}: {pid} similarity={sim:.4f}")
+                    
+                    # Crop face for potential AI analysis later
+                    x, y, w, h = area.get('x', 0), area.get('y', 0), area.get('w', 0), area.get('h', 0)
+                    pad = int(max(w, h) * 0.2)
+                    img_h, img_w = frame_img.shape[:2]
+                    x1 = max(0, x - pad)
+                    y1 = max(0, y - pad)
+                    x2 = min(img_w, x + w + pad)
+                    y2 = min(img_h, y + h + pad)
+                    protected_face_crops.append(frame_img[y1:y2, x1:x2])
+                else:
+                    print(f"[IDENTITY] Frame {frame_num}: no registered match")
+        
+        frame_res = VideoFrameResult(
+            frame_number=frame_num,
+            timestamp=timestamp,
+            faces_detected=len(faces),
+            identity_matches=identity_matches,
+            protected_identity_detected=protected_detected,
+            ai_analysis=VideoFrameAIResult(performed=False, reason="NO_PROTECTED_IDENTITY")
+        )
+        frames_results.append(frame_res)
+        
+        if protected_detected:
+            relevant_frames.append((frame_res, protected_face_crops))
+
+    print(f"[VIDEO] Protected identity found in {len(relevant_frames)}/{len(sampled_frames)} frames")
+
+    # 4. AI Detection (Layer 2) on Relevant Frames only
+    flagged_frames_count = 0
+    total_ai_scores = []
+    
+    for frame_res, crops in relevant_frames:
+        print(f"[AI] Frame {frame_res.frame_number}: analyzing")
+        frame_flagged = False
+        max_score = 0.0
+        
+        for crop in crops:
+            try:
+                ai_result = ai_detector.analyze(crop)
+                score = ai_result["ai_confidence"]
+                max_score = max(max_score, score)
+                if ai_result["is_ai"]:
+                    frame_flagged = True
+            except Exception as e:
+                frame_res.ai_analysis = VideoFrameAIResult(
+                    performed=False,
+                    error=str(e)
+                )
+                break
+        else:
+            # Loop completed without errors
+            total_ai_scores.append(max_score)
+            if frame_flagged:
+                flagged_frames_count += 1
+            
+            print(f"[AI] Frame {frame_res.frame_number}: score={max_score:.4f}")
+            frame_res.ai_analysis = VideoFrameAIResult(
+                performed=True,
+                result="AI_GENERATED" if frame_flagged else "REAL",
+                score=round(max_score, 4)
+            )
+
+    # 5. Video-Level Aggregation
+    frames_with_identity_count = len(relevant_frames)
+    identity_ratio = frames_with_identity_count / len(sampled_frames) if sampled_frames else 0.0
+    
+    frames_analyzed = len(total_ai_scores)
+    flagged_ratio = flagged_frames_count / frames_analyzed if frames_analyzed else 0.0
+    
+    # Calculate aggregate AI score (median)
+    if total_ai_scores:
+        aggregate_score = float(np.median(total_ai_scores))
+    else:
+        aggregate_score = 0.0
+        
+    print(f"[VIDEO] AI analysis completed: {frames_analyzed} frames")
+
+    # 6. Video Decision
+    meta_boost = (video_meta_forensics and video_meta_forensics.get('confidence') in ('medium', 'high'))
+
+    if frames_with_identity_count == 0:
+        final_status = "NO_THREAT_DETECTED"
+        ai_status = "NOT_ANALYZED"
+        summary = f"CLEAR: {len(sampled_frames)} frame(s) sampled, no protected identity detected."
+        if meta_boost:
+            summary += " ⚠️ However, file metadata contains AI-generation markers."
+    else:
+        if flagged_ratio >= 0.3 or (flagged_frames_count > 0 and aggregate_score >= config.AI_DETECTOR_THRESHOLD) or meta_boost:
+            final_status = "POTENTIAL_AI_MANIPULATION"
+            ai_status = "POTENTIAL_AI_MANIPULATION"
+            reasons = []
+            if flagged_frames_count > 0:
+                reasons.append(f"{flagged_frames_count} frames flagged by AI detector")
+            if meta_boost:
+                reasons.append("file metadata contains AI-generation markers")
+            summary = f"REVIEW REQUIRED: {', '.join(reasons)}."
+        else:
+            final_status = "REVIEW_REQUIRED" if flagged_frames_count > 0 else "NO_THREAT_DETECTED"
+            ai_status = "NO_STRONG_AI_EVIDENCE"
+            summary = f"CLEAR: Protected identity found in {frames_with_identity_count} frames. No strong evidence of manipulation."
+            
+    print(f"[VIDEO] Final status: {final_status}")
+
+    return VideoScanDetailedResponse(
+        video=VideoMetadata(
+            duration=metadata["duration"],
+            fps=metadata["fps"],
+            total_frames=metadata["total_frames"],
+            sampled_frames=len(sampled_frames)
+        ),
+        identity=VideoIdentityResult(
+            protected_identity_detected=(frames_with_identity_count > 0),
+            person_ids=list(person_ids_detected),
+            frames_with_identity=frames_with_identity_count,
+            identity_frame_ratio=round(identity_ratio, 4)
+        ),
+        ai_analysis=VideoAIAnalysis(
+            frames_analyzed=frames_analyzed,
+            frames_flagged=flagged_frames_count,
+            flagged_frame_ratio=round(flagged_ratio, 4),
+            aggregate_score=round(aggregate_score, 4),
+            status=ai_status
+        ),
+        final_status=final_status,
+        summary=summary,
+        frames=frames_results,
+        metadata_forensics=video_meta_forensics
+    )
+
+
 @app.post("/api/scan-video", response_model=VideoScanDetailedResponse)
 async def scan_video(file: UploadFile = File(...)):
     """Sample an uploaded video and scan each sampled frame."""
-    suffix = os.path.splitext(file.filename or "upload.mp4")[1] or ".mp4"
-    valid_extensions = [".mp4", ".mov", ".avi", ".mkv", ".webm"]
-    if suffix.lower() not in valid_extensions:
-        raise HTTPException(status_code=400, detail="Unsupported video format.")
+    filename = file.filename or "upload.mp4"
+    suffix = os.path.splitext(filename)[1]
+    if not suffix or suffix.lower() not in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp", ".m4v"]:
+        suffix = ".mp4"
         
     temp_path = None
     try:
@@ -435,201 +722,32 @@ async def scan_video(file: UploadFile = File(...)):
             temp_file.write(await file.read())
             temp_path = temp_file.name
 
-        print(f"[VIDEO] Received video: {file.filename}")
-        
-        # 0. Metadata Forensics on the video file
-        video_meta_forensics = None
-        try:
-            video_meta_forensics = metadata_analyzer.analyze_video_file(temp_path)
-            print(f"[METADATA] Video scan: {video_meta_forensics['confidence']} confidence, {len(video_meta_forensics['flags'])} flag(s)")
-            for flag in video_meta_forensics['flags']:
-                print(f"  → {flag}")
-        except Exception as e:
-            print(f"[METADATA] Error during video metadata analysis: {e}")
+        return _process_video_file(temp_path, filename)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
 
-        # 1. Video Metadata
-        try:
-            metadata = extract_video_metadata(temp_path)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid or corrupted video: {e}")
-            
-        print(f"[VIDEO] Duration: {metadata['duration']} sec, FPS: {metadata['fps']}")
-        
-        sample_interval = getattr(config, 'VIDEO_SAMPLE_INTERVAL', 2.0)
-        print(f"[VIDEO] Sampling every {sample_interval} sec")
 
-        # 2. Extract Sampled Frames
-        sampled_frames = list(sample_video_frames(temp_path, sample_interval))
-        print(f"[VIDEO] Sampled {len(sampled_frames)} frames")
+@app.post("/api/scan-video-base64", response_model=VideoScanDetailedResponse)
+async def scan_video_base64(req: ScanVideoBase64Request):
+    """Scan base64-encoded video (ideal for mobile clients)."""
+    b64_str = req.video
+    if "," in b64_str:
+        b64_str = b64_str.split(",", 1)[1]
+    video_bytes = base64.b64decode(b64_str)
 
-        frames_results = []
-        relevant_frames = [] # Tuples of (frame_result, list of protected face crops)
-        person_ids_detected = set()
+    filename = req.filename or "upload.mp4"
+    suffix = os.path.splitext(filename)[1]
+    if not suffix or suffix.lower() not in [".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp", ".m4v"]:
+        suffix = ".mp4"
 
-        # 3. Face Detection & Identity Matching (Layer 1)
-        for frame_data in sampled_frames:
-            frame_num = frame_data["frame_number"]
-            timestamp = frame_data["timestamp"]
-            frame_img = frame_data["frame"]
-            
-            # Detect faces
-            faces = generate_frame_embeddings(frame_img)
-            print(f"[FACE] Frame {frame_num}: {len(faces)} faces")
-            
-            identity_matches = []
-            protected_detected = False
-            protected_face_crops = []
-            
-            if faces:
-                for face in faces:
-                    emb = face["embedding"]
-                    area = face["facial_area"]
-                    search_results = face_index.search(emb, k=1)
-                    
-                    if search_results:
-                        best = search_results[0]
-                        sim = best["similarity"]
-                        pid = best["person_id"]
-                        
-                        identity_matches.append(VideoFrameIdentityMatch(
-                            person_id=pid,
-                            similarity=round(sim, 4)
-                        ))
-                        
-                        protected_detected = True
-                        person_ids_detected.add(pid)
-                        print(f"[IDENTITY] Frame {frame_num}: {pid} similarity={sim:.4f}")
-                        
-                        # Crop face for potential AI analysis later
-                        x, y, w, h = area.get('x', 0), area.get('y', 0), area.get('w', 0), area.get('h', 0)
-                        pad = int(max(w, h) * 0.2)
-                        img_h, img_w = frame_img.shape[:2]
-                        x1 = max(0, x - pad)
-                        y1 = max(0, y - pad)
-                        x2 = min(img_w, x + w + pad)
-                        y2 = min(img_h, y + h + pad)
-                        protected_face_crops.append(frame_img[y1:y2, x1:x2])
-                    else:
-                        print(f"[IDENTITY] Frame {frame_num}: no registered match")
-            
-            frame_res = VideoFrameResult(
-                frame_number=frame_num,
-                timestamp=timestamp,
-                faces_detected=len(faces),
-                identity_matches=identity_matches,
-                protected_identity_detected=protected_detected,
-                ai_analysis=VideoFrameAIResult(performed=False, reason="NO_PROTECTED_IDENTITY")
-            )
-            frames_results.append(frame_res)
-            
-            if protected_detected:
-                relevant_frames.append((frame_res, protected_face_crops))
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(video_bytes)
+            temp_path = temp_file.name
 
-        print(f"[VIDEO] Protected identity found in {len(relevant_frames)}/{len(sampled_frames)} frames")
-
-        # 4. AI Detection (Layer 2) on Relevant Frames only
-        flagged_frames_count = 0
-        total_ai_scores = []
-        
-        for frame_res, crops in relevant_frames:
-            print(f"[AI] Frame {frame_res.frame_number}: analyzing")
-            frame_flagged = False
-            max_score = 0.0
-            
-            for crop in crops:
-                try:
-                    ai_result = ai_detector.analyze(crop)
-                    score = ai_result["ai_confidence"]
-                    max_score = max(max_score, score)
-                    if ai_result["is_ai"]:
-                        frame_flagged = True
-                except Exception as e:
-                    frame_res.ai_analysis = VideoFrameAIResult(
-                        performed=False,
-                        error=str(e)
-                    )
-                    break
-            else:
-                # Loop completed without errors
-                total_ai_scores.append(max_score)
-                if frame_flagged:
-                    flagged_frames_count += 1
-                
-                print(f"[AI] Frame {frame_res.frame_number}: score={max_score:.4f}")
-                frame_res.ai_analysis = VideoFrameAIResult(
-                    performed=True,
-                    result="AI_GENERATED" if frame_flagged else "REAL",
-                    score=round(max_score, 4)
-                )
-
-        # 5. Video-Level Aggregation
-        frames_with_identity_count = len(relevant_frames)
-        identity_ratio = frames_with_identity_count / len(sampled_frames) if sampled_frames else 0.0
-        
-        frames_analyzed = len(total_ai_scores)
-        flagged_ratio = flagged_frames_count / frames_analyzed if frames_analyzed else 0.0
-        
-        # Calculate aggregate AI score (median)
-        if total_ai_scores:
-            aggregate_score = float(np.median(total_ai_scores))
-        else:
-            aggregate_score = 0.0
-            
-        print(f"[VIDEO] AI analysis completed: {frames_analyzed} frames")
-
-        # 6. Video Decision
-        # Check if metadata forensics found strong AI markers
-        meta_boost = (video_meta_forensics and video_meta_forensics.get('confidence') in ('medium', 'high'))
-
-        if frames_with_identity_count == 0:
-            final_status = "NO_THREAT_DETECTED"
-            ai_status = "NOT_ANALYZED"
-            summary = f"CLEAR: {len(sampled_frames)} frame(s) sampled, no protected identity detected."
-            if meta_boost:
-                summary += " ⚠️ However, file metadata contains AI-generation markers."
-        else:
-            if flagged_ratio >= 0.3 or (flagged_frames_count > 0 and aggregate_score >= config.AI_DETECTOR_THRESHOLD) or meta_boost:
-                final_status = "POTENTIAL_AI_MANIPULATION"
-                ai_status = "POTENTIAL_AI_MANIPULATION"
-                reasons = []
-                if flagged_frames_count > 0:
-                    reasons.append(f"{flagged_frames_count} frames flagged by AI detector")
-                if meta_boost:
-                    reasons.append("file metadata contains AI-generation markers")
-                summary = f"REVIEW REQUIRED: {', '.join(reasons)}."
-            else:
-                final_status = "REVIEW_REQUIRED" if flagged_frames_count > 0 else "NO_THREAT_DETECTED"
-                ai_status = "NO_STRONG_AI_EVIDENCE"
-                summary = f"CLEAR: Protected identity found in {frames_with_identity_count} frames. No strong evidence of manipulation."
-                
-        print(f"[VIDEO] Final status: {final_status}")
-
-        return VideoScanDetailedResponse(
-            video=VideoMetadata(
-                duration=metadata["duration"],
-                fps=metadata["fps"],
-                total_frames=metadata["total_frames"],
-                sampled_frames=len(sampled_frames)
-            ),
-            identity=VideoIdentityResult(
-                protected_identity_detected=(frames_with_identity_count > 0),
-                person_ids=list(person_ids_detected),
-                frames_with_identity=frames_with_identity_count,
-                identity_frame_ratio=round(identity_ratio, 4)
-            ),
-            ai_analysis=VideoAIAnalysis(
-                frames_analyzed=frames_analyzed,
-                frames_flagged=flagged_frames_count,
-                flagged_frame_ratio=round(flagged_ratio, 4),
-                aggregate_score=round(aggregate_score, 4),
-                status=ai_status
-            ),
-            final_status=final_status,
-            summary=summary,
-            frames=frames_results,
-            metadata_forensics=video_meta_forensics
-        )
-
+        return _process_video_file(temp_path, filename)
     finally:
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
