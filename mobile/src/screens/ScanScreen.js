@@ -302,6 +302,14 @@ function ScanResultCard({ result }) {
       {result.metadata_forensics && (
         <MetadataPanel meta={result.metadata_forensics} title="Image Metadata Forensics" />
       )}
+
+      {/* Auto Email Report Indicator */}
+      <View style={styles.emailDispatchedRow}>
+        <Mail size={14} color={Colors.primary} style={{ marginRight: 6 }} />
+        <Text style={styles.emailDispatchedText}>
+          Forensic report automatically archived & dispatched via email
+        </Text>
+      </View>
     </View>
   );
 }
@@ -637,5 +645,21 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     marginTop: 2,
     lineHeight: 16,
+  },
+  emailDispatchedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    padding: 10,
+    borderRadius: 8,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  emailDispatchedText: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    fontWeight: '500',
+    flex: 1,
   },
 });

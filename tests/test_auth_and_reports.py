@@ -74,7 +74,12 @@ def run_tests():
     # 6. Test Email Resend
     res = client.post(f"/api/reports/{rep['id']}/resend-email", headers=headers)
     assert res.status_code == 200, f"Resend email failed: {res.text}"
-    print(f"[6/6] Email Dispatch: {res.json()['message']}")
+    print(f"[6/7] Email Dispatch: {res.json()['message']}")
+
+    # 7. Test Direct Test-Email Endpoint
+    res = client.post("/api/auth/test-email", json={"to_email": test_email})
+    assert res.status_code in (200, 400), f"Test email endpoint failed: {res.text}"
+    print(f"[7/7] Test Email Route: Response received ({res.status_code})")
 
     # Check Audit Logs
     logs = db.get_audit_logs(user_id=user_id)

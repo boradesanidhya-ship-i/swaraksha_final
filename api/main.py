@@ -146,6 +146,15 @@ class ScanReportResponse(BaseModel):
     created_at: Optional[str] = None
 
 
+class TestEmailRequest(BaseModel):
+    to_email: str
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_use_tls: Optional[bool] = None
+
+
 class RegisterBase64Request(BaseModel):
     person_id: str
     name: str
@@ -155,11 +164,15 @@ class RegisterBase64Request(BaseModel):
 class ScanBase64Request(BaseModel):
     image: str
     filename: Optional[str] = "scan.jpg"
+    user_email: Optional[str] = None
+    email: Optional[str] = None
 
 
 class ScanVideoBase64Request(BaseModel):
     video: str
     filename: Optional[str] = "upload.mp4"
+    user_email: Optional[str] = None
+    email: Optional[str] = None
 
 
 class PersonResponse(BaseModel):
@@ -290,6 +303,24 @@ def _save_and_dispatch_report(
         user_id = user["id"] if user else None
         target_email = user_email_override or (user["email"] if user else None)
 
+        # If no explicit email, check if any matched protected identity has an owner user
+        if not target_email and details:
+            identity_info = details.get("identity", {})
+            p_ids = identity_info.get("person_ids", [])
+            if not p_ids and details.get("results"):
+                p_ids = [r.get("person_id") for r in details.get("results") if r.get("person_id")]
+
+            for pid in p_ids:
+                if pid:
+                    person = db.get_person(pid)
+                    if person and person.get("user_id"):
+                        owner = db.get_user_by_id(person["user_id"])
+                        if owner and owner.get("email"):
+                            target_email = owner["email"]
+                            user_id = owner["id"]
+                            print(f"[REPORT] Auto-matched protected identity '{pid}' to user {target_email}")
+                            break
+
         report = db.create_scan_report(
             report_type=report_type,
             action_verdict=action_verdict,
@@ -300,18 +331,45 @@ def _save_and_dispatch_report(
             email_sent=False
         )
 
-        if target_email and background_tasks:
-            def _dispatch():
+        if target_email:
+            print(f"[REPORT] Report #{report['id']} created for {target_email}. Queueing email dispatch...")
+            if background_tasks:
+                def _dispatch():
+                    sent = send_report_email(target_email, report)
+                    if sent:
+                        db.mark_report_email_sent(report["id"])
+
+                background_tasks.add_task(_dispatch)
+            else:
                 sent = send_report_email(target_email, report)
                 if sent:
                     db.mark_report_email_sent(report["id"])
-
-            background_tasks.add_task(_dispatch)
+        else:
+            print(f"[REPORT] Report #{report['id']} saved to database (No user email provided for email delivery).")
     except Exception as e:
         print(f"[REPORT] Error recording and dispatching scan report: {e}")
 
 
 # ── Auth & Report Endpoints ─────────────────────────────────────────────────
+
+@app.post("/api/auth/test-email")
+async def test_email_endpoint(req: TestEmailRequest):
+    """
+    Test sending a live email to the specified address.
+    """
+    from core.email_service import send_test_email
+    success, message = send_test_email(
+        to_email=req.to_email,
+        smtp_host=req.smtp_host,
+        smtp_port=req.smtp_port,
+        smtp_user=req.smtp_user,
+        smtp_password=req.smtp_password,
+        smtp_use_tls=req.smtp_use_tls
+    )
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    return {"status": "success", "message": message}
+
 
 @app.post("/api/auth/register", response_model=AuthResponse)
 async def register_user(req: RegisterUserRequest):
@@ -752,13 +810,14 @@ async def scan_image_base64(
         print(f"[METADATA] Error during base64 metadata analysis: {e}")
 
     # Auto-save report & dispatch email in background
+    target_email = req.user_email or req.email or user_email
     _save_and_dispatch_report(
         report_type="FACE_SCAN",
         action_verdict=result.overall_action,
         summary=result.summary,
         details=result.dict(),
         user=user,
-        user_email_override=user_email,
+        user_email_override=target_email,
         background_tasks=background_tasks
     )
 
@@ -1026,13 +1085,14 @@ async def scan_video_base64(
         result = _process_video_file(temp_path, filename)
 
         # Auto-save report & dispatch email in background
+        target_email = req.user_email or req.email or user_email
         _save_and_dispatch_report(
             report_type="VIDEO_SCAN",
             action_verdict=result.final_status,
             summary=result.summary,
             details=result.dict(),
             user=user,
-            user_email_override=user_email,
+            user_email_override=target_email,
             background_tasks=background_tasks
         )
 

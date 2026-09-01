@@ -133,6 +133,14 @@ export async function resendReportEmail(reportId, toEmail = null) {
   return res.data;
 }
 
+export async function sendTestEmail(toEmail) {
+  const client = await getApiClient(20000);
+  const res = await client.post('/api/auth/test-email', {
+    to_email: toEmail,
+  });
+  return res.data;
+}
+
 // ── Core AI Scan & Enrollment Operations ───────────────────────────────────
 
 /**
@@ -180,10 +188,12 @@ export async function registerIdentity(personId, name, imageFiles) {
 export async function scanFaceImage(imageUri, fileName = 'scan_capture.jpg') {
   const client = await getApiClient(120000);
   const b64 = await uriToBase64(imageUri);
+  const user = await getUserProfile();
 
   const res = await client.post('/api/scan-base64', {
     image: b64,
     filename: fileName,
+    user_email: user?.email || undefined,
   });
 
   return res.data;
@@ -195,10 +205,12 @@ export async function scanFaceImage(imageUri, fileName = 'scan_capture.jpg') {
 export async function scanVideoFile(videoUri, fileName = 'upload.mp4') {
   const client = await getApiClient(300000); // 5 minutes for video analysis
   const b64 = await uriToBase64(videoUri);
+  const user = await getUserProfile();
 
   const res = await client.post('/api/scan-video-base64', {
     video: b64,
     filename: fileName,
+    user_email: user?.email || undefined,
   });
 
   return res.data;
