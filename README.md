@@ -110,7 +110,7 @@ SMTP_FROM_NAME=SWARAKSHA Cyber Defense
 SMTP_USE_TLS=true
 ```
 
-> 💡 **Gmail App Password:** If using Gmail, enable 2-Step Verification on your Google Account and generate a 16-character password at [https://myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).
+>  **Gmail App Password:** If using Gmail, enable 2-Step Verification on your Google Account and generate a 16-character password at [https://myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).
 
 ---
 
@@ -161,7 +161,7 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
-## 📦 Dependency Manifest
+##  Dependency Manifest
 
 ### Backend Python Packages (`requirements.txt`)
 
@@ -197,7 +197,7 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
-## 📡 API Endpoint Reference
+##  API Endpoint Reference
 
 ### Authentication & User Management
 - `POST /api/auth/register` — Create new user account with email and password.
@@ -218,18 +218,18 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
-## ⚡ Performance Acceleration Benchmarks (v2.5)
+##  Performance Acceleration Benchmarks (v2.5)
 
 | Pipeline Operation | Before Optimization | After Optimization | Realized Speedup |
 | :--- | :---: | :---: | :---: |
-| **5-Photo Reference Enrollment** | ~15 – 18 sec | **~2.0 – 2.8 sec** | **~6x Faster** ⚡ |
-| **Live Face Scan** | ~2.5 – 3.2 sec | **~0.6 – 0.8 sec** | **~4x Faster** ⚡ |
-| **30-Second Video Lab Scan** | ~30 – 40 sec | **~4.5 – 6.0 sec** | **~7x Faster** ⚡ |
-| **Deepfake ViT Batch (10 frames)**| ~4.2 sec | **~0.48 sec** | **~8.5x Faster** ⚡ |
+| **5-Photo Reference Enrollment** | ~15 – 18 sec | **~2.0 – 2.8 sec** | **~6x Faster**  |
+| **Live Face Scan** | ~2.5 – 3.2 sec | **~0.6 – 0.8 sec** | **~4x Faster**  |
+| **30-Second Video Lab Scan** | ~30 – 40 sec | **~4.5 – 6.0 sec** | **~7x Faster**  |
+| **Deepfake ViT Batch (10 frames)**| ~4.2 sec | **~0.48 sec** | **~8.5x Faster**  |
 
 ---
 
-## 📂 Project Structure
+##  Project Structure
 
 ```text
 Swaraksha/
@@ -265,7 +265,7 @@ Swaraksha/
 
 ---
 
-## 🔒 Security & Privacy Notice
+##  Security & Privacy Notice
 
 - All biometric facial embeddings and vector indexes are stored locally.
 - Passwords are encrypted using salted **Bcrypt** hashes.
