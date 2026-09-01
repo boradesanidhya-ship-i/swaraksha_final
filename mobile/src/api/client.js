@@ -1,20 +1,32 @@
 import axios from 'axios';
 import { File } from 'expo-file-system';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
-import { getServerUrl } from '../utils/storage';
+import { getServerUrl, getAuthToken, getUserProfile } from '../utils/storage';
 
 /**
- * Creates an Axios instance with the latest server URL configured in storage.
+ * Creates an Axios instance with latest server URL and Auth token configured.
  */
 export async function getApiClient(timeoutMs = 60000) {
   const baseURL = await getServerUrl();
+  const token = await getAuthToken();
+  const user = await getUserProfile();
+
+  const headers = {
+    'Accept': 'application/json',
+    'Content-Type': 'application/json',
+  };
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  if (user?.email) {
+    headers['user_email'] = user.email;
+  }
+
   return axios.create({
     baseURL,
     timeout: timeoutMs,
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-    },
+    headers,
   });
 }
 
@@ -52,7 +64,7 @@ async function uriToBase64(uri) {
       reader.readAsDataURL(blob);
     });
   } catch (e) {
-    throw new Error(`Could not read image file at ${uri}: ${e.message}`);
+    throw new Error(`Could not read file at ${uri}: ${e.message}`);
   }
 }
 
@@ -77,6 +89,51 @@ export async function checkServerHealth(customUrl = null) {
     };
   }
 }
+
+// ── Authentication API ─────────────────────────────────────────────────────
+
+export async function loginUser(email, password) {
+  const client = await getApiClient(15000);
+  const res = await client.post('/api/auth/login', {
+    email: email.trim(),
+    password,
+  });
+  return res.data;
+}
+
+export async function registerUser(email, password, fullName = null) {
+  const client = await getApiClient(15000);
+  const res = await client.post('/api/auth/register', {
+    email: email.trim(),
+    password,
+    full_name: fullName ? fullName.trim() : null,
+  });
+  return res.data;
+}
+
+export async function fetchMyProfile() {
+  const client = await getApiClient(10000);
+  const res = await client.get('/api/auth/me');
+  return res.data;
+}
+
+// ── Forensic Reports API ───────────────────────────────────────────────────
+
+export async function fetchReportHistory(email = null) {
+  const client = await getApiClient(15000);
+  const params = email ? { email } : {};
+  const res = await client.get('/api/reports', { params });
+  return res.data;
+}
+
+export async function resendReportEmail(reportId, toEmail = null) {
+  const client = await getApiClient(20000);
+  const params = toEmail ? { to_email: toEmail } : {};
+  const res = await client.post(`/api/reports/${reportId}/resend-email`, null, { params });
+  return res.data;
+}
+
+// ── Core AI Scan & Enrollment Operations ───────────────────────────────────
 
 /**
  * Get all registered protected identities.
@@ -132,6 +189,9 @@ export async function scanFaceImage(imageUri, fileName = 'scan_capture.jpg') {
   return res.data;
 }
 
+/**
+ * Scan a video file through the two-layer video pipeline using Base64.
+ */
 export async function scanVideoFile(videoUri, fileName = 'upload.mp4') {
   const client = await getApiClient(300000); // 5 minutes for video analysis
   const b64 = await uriToBase64(videoUri);

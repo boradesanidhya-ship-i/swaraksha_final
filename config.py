@@ -4,6 +4,10 @@ Centralized constants, thresholds, and paths.
 """
 
 import os
+from dotenv import load_dotenv
+
+# Load .env file if present
+load_dotenv()
 
 # === Paths ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +39,33 @@ AI_DETECTOR_THRESHOLD = 0.85        # Increased threshold to reduce false positi
 # === FAISS Index ===
 FAISS_INDEX_PATH = os.path.join(STORAGE_DIR, "faiss_index.bin")
 FAISS_ID_MAP_PATH = os.path.join(STORAGE_DIR, "faiss_id_map.json")
+
+# === Database & PostgreSQL ===
+POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "swaraksha_db")
+
+# Default database URL (PostgreSQL if available or provided, falls back to SQLite)
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+)
+
+# === Authentication & Security ===
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "swaraksha-super-secure-secret-key-2026")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "10080")) # 7 days default
+
+# === Email Notifications (SMTP) ===
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "notifications@swaraksha.ai")
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "SWARAKSHA Cyber Defense")
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() in ("true", "1", "yes")
 
 # === Create directories on import ===
 for _dir in [STORAGE_DIR, REGISTERED_FACES_DIR, EMBEDDINGS_DIR,

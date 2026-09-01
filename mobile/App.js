@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
@@ -17,6 +18,7 @@ import {
   Users,
   ScanFace,
   FileVideo,
+  FileText,
   Sparkles,
 } from 'lucide-react-native';
 
@@ -25,11 +27,13 @@ import ProgressBar from './src/components/ProgressBar';
 import ActivityTerminal from './src/components/ActivityTerminal';
 import ServerModal from './src/components/ServerModal';
 
+import AuthScreen from './src/screens/AuthScreen';
 import StartScreen from './src/screens/StartScreen';
 import ScanScreen from './src/screens/ScanScreen';
 import ReferenceScreen from './src/screens/ReferenceScreen';
 import DirectoryScreen from './src/screens/DirectoryScreen';
 import VideoScreen from './src/screens/VideoScreen';
+import ReportsScreen from './src/screens/ReportsScreen';
 
 import {
   checkServerHealth,
@@ -39,11 +43,23 @@ import {
   scanFaceImage,
   scanVideoFile,
 } from './src/api/client';
-import { getServerUrl, getRecentAdds, saveRecentAdd } from './src/utils/storage';
+import {
+  getServerUrl,
+  getRecentAdds,
+  saveRecentAdd,
+  getAuthToken,
+  getUserProfile,
+  clearAuth,
+} from './src/utils/storage';
 
 export default function App() {
   // Navigation & Screen Mode
-  const [mode, setMode] = useState('start'); // 'start' | 'scan' | 'reference' | 'directory' | 'video'
+  const [mode, setMode] = useState('start'); // 'start' | 'scan' | 'reference' | 'directory' | 'video' | 'reports'
+
+  // User Auth State
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authToken, setAuthTokenState] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   // Server & Connection State
   const [backendOnline, setBackendOnline] = useState(false);
@@ -86,6 +102,12 @@ export default function App() {
     const url = await getServerUrl();
     setServerUrlState(url);
 
+    const token = await getAuthToken();
+    const user = await getUserProfile();
+    setAuthTokenState(token);
+    setCurrentUser(user);
+    setAuthLoading(false);
+
     const adds = await getRecentAdds();
     setRecentAdds(adds);
 
@@ -99,7 +121,7 @@ export default function App() {
         setPersons(people);
       } catch (e) {}
     } else {
-      log(`Could not reach backend at ${url}. Tap settings to configure.`);
+      log(`Could not reach backend at ${url}`);
     }
   };
 
@@ -107,45 +129,89 @@ export default function App() {
     loadInitialData();
   }, []);
 
+  const handleLogout = () => {
+    Alert.alert(
+      'Sign Out',
+      'Are you sure you want to sign out of SWARAKSHA?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            await clearAuth();
+            setCurrentUser(null);
+            setAuthTokenState(null);
+            setMode('start');
+            log('User logged out.');
+          },
+        },
+      ]
+    );
+  };
+
+  const handleAuthSuccess = (user, token) => {
+    setCurrentUser(user);
+    setAuthTokenState(token);
+    log(`Authenticated as ${user.email}`);
+    loadInitialData();
+  };
+
+  // --- Directory Actions ---
   const refreshDirectory = async () => {
     try {
-      const people = await fetchPersons();
-      setPersons(people);
+      const list = await fetchPersons();
+      setPersons(list);
     } catch (err) {
       log(`Failed to refresh directory: ${err.message}`);
     }
   };
 
-  // --- Scan Actions ---
+  const handleDeletePerson = async (pId) => {
+    try {
+      await removePerson(pId);
+      log(`Deleted protected identity: ${pId}`);
+      await refreshDirectory();
+    } catch (err) {
+      log(`Failed to delete ${pId}: ${err.message}`);
+    }
+  };
+
+  // --- Scan Face Actions ---
   const handleScanImage = async (imageUri) => {
     if (!imageUri || isScanning) return;
+
     setIsScanning(true);
     setScanResult(null);
-    setProgress({ label: 'Uploading photo to SWARAKSHA', value: 20 });
-    log('Sending image to scan endpoint...');
+    setProgress({ label: 'Analyzing frame with Vision Transformer', value: 30 });
+    log('Initiating dual-layer scan...');
 
     const timer = setInterval(() => {
       setProgress((prev) => {
-        if (!prev || prev.value >= 85) return prev;
-        const nextVal = prev.value + 10;
-        let label = 'Detecting faces & matching identities...';
-        if (nextVal > 60) label = 'Running AI authenticity check...';
+        if (!prev || prev.value >= 90) return prev;
+        const nextVal = prev.value + 15;
+        let label = 'Matching facial embeddings in FAISS...';
+        if (nextVal > 60) label = 'Performing EXIF/C2PA metadata forensics...';
         return { label, value: nextVal };
       });
-    }, 700);
+    }, 400);
 
     try {
       const result = await scanFaceImage(imageUri);
       clearInterval(timer);
-      setProgress({ label: 'Scan completed', value: 100 });
+      setProgress({ label: 'Forensic scan complete', value: 100 });
+
       setScanResult(result);
-      log(`Scan verdict: ${result.overall_action} (${result.faces_detected} face(s) analyzed)`);
+      log(`Scan result: ${result.overall_action} (${result.faces_detected} face(s) detected)`);
+      if (currentUser?.email) {
+        log(`Forensic report auto-dispatched to ${currentUser.email}`);
+      }
     } catch (err) {
       clearInterval(timer);
       setScanResult({
-        overall_action: 'ERROR',
         faces_detected: 0,
         results: [],
+        overall_action: 'ALLOW',
         summary:
           err.code === 'ERR_NETWORK' || !backendOnline
             ? 'Backend is unreachable. Please verify server IP in Settings.'
@@ -229,209 +295,223 @@ export default function App() {
       log(`Registration failed: ${err.message}`);
     } finally {
       setIsRegistering(false);
-      setTimeout(() => setProgress(null), 1000);
-    }
-  };
-
-  // --- Directory Delete Action ---
-  const handleDeletePerson = async (pid) => {
-    try {
-      const res = await removePerson(pid);
-      log(`Deleted protected identity: ${pid}`);
-      setPersons((prev) => prev.filter((p) => p.person_id !== pid));
-    } catch (err) {
-      log(`Delete failed: ${err.response?.data?.detail || err.message}`);
+      setTimeout(() => setProgress(null), 1200);
     }
   };
 
   // --- Video Lab Actions ---
   const handleScanVideo = async () => {
-    if (!videoFiles.length || isVideoScanning) return;
+    if (videoFiles.length === 0 || isVideoScanning) return;
+
     setIsVideoScanning(true);
     setVideoResults([]);
-    setProgress({ label: 'Uploading video file', value: 15 });
-    log(`Video pipeline started: ${videoFiles.length} file(s) in queue.`);
+    setProgress({ label: 'Preparing video upload stream', value: 15 });
+    log(`Analyzing ${videoFiles.length} video(s)...`);
 
-    const timer = setInterval(() => {
-      setProgress((prev) => {
-        if (!prev || prev.value >= 90) return prev;
-        const nextVal = prev.value + 5;
-        let label = 'Sampling video frames at 2.0s...';
-        if (nextVal > 40) label = 'Layer 1: RetinaFace & FAISS matching...';
-        if (nextVal > 70) label = 'Layer 2: Vision Transformer deepfake analysis...';
-        return { label, value: nextVal };
+    const results = [];
+    for (let i = 0; i < videoFiles.length; i++) {
+      const vf = videoFiles[i];
+      setProgress({
+        label: `Sampling frames for video ${i + 1}/${videoFiles.length}`,
+        value: 20 + Math.round((i / videoFiles.length) * 60),
       });
-    }, 1200);
 
-    try {
-      for (const file of videoFiles) {
-        const name = file.fileName || file.name || 'video.mp4';
-        log(`Analyzing video: ${name}`);
-        const response = await scanVideoFile(file.uri, name);
-        setVideoResults((prev) => [...prev, { fileName: name, ...response }]);
-        log(`Video scan complete: ${name} -> ${response.final_status}`);
+      try {
+        const res = await scanVideoFile(vf.uri, vf.name);
+        results.push({ file: vf, data: res });
+        log(`Video [${vf.name}]: ${res.final_status} (${res.video?.sampled_frames || 0} frames)`);
+        if (currentUser?.email) {
+          log(`Video analysis report dispatched to ${currentUser.email}`);
+        }
+      } catch (err) {
+        log(`Video [${vf.name}] error: ${err.message}`);
+        results.push({
+          file: vf,
+          error: err.response?.data?.detail || err.message || 'Scan failed',
+        });
       }
-      clearInterval(timer);
-      setProgress({ label: 'Video processing complete', value: 100 });
-    } catch (err) {
-      clearInterval(timer);
-      setVideoResults((prev) => [
-        ...prev,
-        {
-          fileName: 'Scan Error',
-          final_status: 'ERROR',
-          summary:
-            err.code === 'ERR_NETWORK' || !backendOnline
-              ? 'Backend unreachable. Verify server IP in Settings.'
-              : err.response?.data?.detail || err.message || 'Video scan failed.',
-        },
-      ]);
-      log(`Video error: ${err.message}`);
-    } finally {
-      setIsVideoScanning(false);
-      setTimeout(() => setProgress(null), 900);
     }
+
+    setVideoResults(results);
+    setProgress({ label: 'Video Lab analysis complete', value: 100 });
+    setIsVideoScanning(false);
+    setTimeout(() => setProgress(null), 1000);
   };
 
-  // Nav items configuration
   const navTabs = [
     { id: 'start', label: 'Home', Icon: LayoutDashboard },
+    { id: 'scan', label: 'Face Scan', Icon: ScanFace },
+    { id: 'reference', label: 'Enroll', Icon: Sparkles },
     { id: 'directory', label: 'Directory', Icon: Users },
-    { id: 'scan', label: 'Scan Face', Icon: ScanFace },
     { id: 'video', label: 'Video Lab', Icon: FileVideo },
+    { id: 'reports', label: 'Reports', Icon: FileText },
   ];
 
   const screenTitleMap = {
-    start: null,
-    scan: 'Face scan',
-    reference: 'Add references',
-    directory: 'Protected people',
-    video: 'Video lab',
+    start: 'SWARAKSHA Cyber Protection',
+    scan: 'Scan Face & Identity',
+    reference: 'Add Reference Images',
+    directory: 'Protected Identities',
+    video: 'Video Forensics Lab',
+    reports: 'Forensic Scan Reports',
   };
+
+  // Render AuthScreen if unauthenticated
+  if (!authLoading && (!currentUser || !authToken)) {
+    return (
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.safeArea}>
+          <ExpoStatusBar style="dark" backgroundColor={Colors.surface} />
+          <AuthScreen
+            onAuthSuccess={handleAuthSuccess}
+            onOpenSettings={() => setIsServerModalOpen(true)}
+            backendOnline={backendOnline}
+            serverUrl={serverUrl}
+          />
+          <ServerModal
+            visible={isServerModalOpen}
+            onClose={() => setIsServerModalOpen(false)}
+            onServerSaved={(newUrl) => {
+              setServerUrlState(newUrl);
+              loadInitialData();
+            }}
+          />
+        </SafeAreaView>
+      </SafeAreaProvider>
+    );
+  }
 
   return (
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
         <ExpoStatusBar style="dark" backgroundColor={Colors.surface} />
 
-      <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        {/* Header Bar */}
-        <Header
-          title={screenTitleMap[mode]}
-          subtitle={mode !== 'start' ? `SWARAKSHA / ${screenTitleMap[mode]}` : null}
-          backendOnline={backendOnline}
-          serverUrl={serverUrl}
-          onOpenSettings={() => setIsServerModalOpen(true)}
-          onGoHome={() => setMode('start')}
-        />
+        <KeyboardAvoidingView
+          style={styles.container}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          {/* Header Bar */}
+          <Header
+            title={screenTitleMap[mode]}
+            subtitle={mode !== 'start' ? `SWARAKSHA / ${screenTitleMap[mode]}` : null}
+            backendOnline={backendOnline}
+            serverUrl={serverUrl}
+            currentUser={currentUser}
+            onLogout={handleLogout}
+            onOpenSettings={() => setIsServerModalOpen(true)}
+            onGoHome={() => setMode('start')}
+          />
 
-        {/* Active Screen Body */}
-        <View style={styles.mainView}>
-          {mode === 'start' && (
-            <StartScreen
-              backendOnline={backendOnline}
-              notice={registrationNotice}
-              onScan={() => setMode('scan')}
-              onReference={() => {
-                setRegisterResult(null);
-                setRegistrationNotice('');
-                setMode('reference');
-              }}
-              onUploadImage={handleUploadImageDirect}
-              onDirectory={() => setMode('directory')}
-              onVideo={() => setMode('video')}
-              onOpenSettings={() => setIsServerModalOpen(true)}
-            />
-          )}
+          {/* Active Screen Body */}
+          <View style={styles.mainView}>
+            {mode === 'start' && (
+              <StartScreen
+                backendOnline={backendOnline}
+                notice={registrationNotice}
+                onScan={() => setMode('scan')}
+                onReference={() => {
+                  setRegisterResult(null);
+                  setRegistrationNotice('');
+                  setMode('reference');
+                }}
+                onUploadImage={handleUploadImageDirect}
+                onDirectory={() => setMode('directory')}
+                onVideo={() => setMode('video')}
+                onOpenSettings={() => setIsServerModalOpen(true)}
+              />
+            )}
 
-          {mode === 'scan' && (
-            <ScanScreen
-              onGoHome={() => setMode('start')}
-              onScanImage={handleScanImage}
-              isScanning={isScanning}
-              scanResult={scanResult}
-              capturedImageUri={capturedImageUri}
-              setCapturedImageUri={setCapturedImageUri}
-            />
-          )}
+            {mode === 'scan' && (
+              <ScanScreen
+                onGoHome={() => setMode('start')}
+                onScanImage={handleScanImage}
+                isScanning={isScanning}
+                scanResult={scanResult}
+                capturedImageUri={capturedImageUri}
+                setCapturedImageUri={setCapturedImageUri}
+              />
+            )}
 
-          {mode === 'reference' && (
-            <ReferenceScreen
-              referenceFiles={referenceFiles}
-              setReferenceFiles={setReferenceFiles}
-              personId={personId}
-              setPersonId={setPersonId}
-              personName={personName}
-              setPersonName={setPersonName}
-              onRegister={handleRegister}
-              isRegistering={isRegistering}
-              registerResult={registerResult}
-              onGoHome={() => setMode('start')}
-            />
-          )}
+            {mode === 'reference' && (
+              <ReferenceScreen
+                referenceFiles={referenceFiles}
+                setReferenceFiles={setReferenceFiles}
+                personId={personId}
+                setPersonId={setPersonId}
+                personName={personName}
+                setPersonName={setPersonName}
+                onRegister={handleRegister}
+                isRegistering={isRegistering}
+                registerResult={registerResult}
+                onGoHome={() => setMode('start')}
+              />
+            )}
 
-          {mode === 'directory' && (
-            <DirectoryScreen
-              persons={persons}
-              recentAdds={recentAdds}
-              onDeletePerson={handleDeletePerson}
-              onRefresh={refreshDirectory}
-              onAddReference={() => setMode('reference')}
-              onGoHome={() => setMode('start')}
-            />
-          )}
+            {mode === 'directory' && (
+              <DirectoryScreen
+                persons={persons}
+                recentAdds={recentAdds}
+                onDeletePerson={handleDeletePerson}
+                onRefresh={refreshDirectory}
+                onAddReference={() => setMode('reference')}
+                onGoHome={() => setMode('start')}
+              />
+            )}
 
-          {mode === 'video' && (
-            <VideoScreen
-              videoFiles={videoFiles}
-              setVideoFiles={setVideoFiles}
-              videoResults={videoResults}
-              onScanVideo={handleScanVideo}
-              isVideoScanning={isVideoScanning}
-              onGoHome={() => setMode('start')}
-            />
-          )}
-        </View>
+            {mode === 'video' && (
+              <VideoScreen
+                videoFiles={videoFiles}
+                setVideoFiles={setVideoFiles}
+                videoResults={videoResults}
+                onScanVideo={handleScanVideo}
+                isVideoScanning={isVideoScanning}
+                onGoHome={() => setMode('start')}
+              />
+            )}
 
-        {/* Floating Progress Bar */}
-        {progress && <ProgressBar progress={progress} />}
+            {mode === 'reports' && (
+              <ReportsScreen
+                userEmail={currentUser?.email}
+              />
+            )}
+          </View>
 
-        {/* Process Monitor Terminal */}
-        <ActivityTerminal entries={activityLog} />
+          {/* Floating Progress Bar */}
+          {progress && <ProgressBar progress={progress} />}
 
-        {/* Bottom Navigation Bar */}
-        <View style={styles.bottomNav}>
-          {navTabs.map(({ id, label, Icon }) => {
-            const isActive = mode === id;
-            return (
-              <TouchableOpacity
-                key={id}
-                style={[styles.navTab, isActive && styles.navTabActive]}
-                onPress={() => setMode(id)}
-                activeOpacity={0.8}
-              >
-                <Icon size={20} color={isActive ? Colors.primary : Colors.textMuted} />
-                <Text style={[styles.navTabLabel, isActive && styles.navTabLabelActive]}>
-                  {label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+          {/* Process Monitor Terminal */}
+          <ActivityTerminal entries={activityLog} />
 
-        {/* Server IP Config Modal */}
-        <ServerModal
-          visible={isServerModalOpen}
-          onClose={() => setIsServerModalOpen(false)}
-          onServerSaved={(newUrl) => {
-            setServerUrlState(newUrl);
-            loadInitialData();
-          }}
-        />
-      </KeyboardAvoidingView>
+          {/* Bottom Navigation Bar */}
+          <View style={styles.bottomNav}>
+            {navTabs.map(({ id, label, Icon }) => {
+              const isActive = mode === id;
+              return (
+                <TouchableOpacity
+                  key={id}
+                  style={[styles.navTab, isActive && styles.navTabActive]}
+                  onPress={() => setMode(id)}
+                  activeOpacity={0.8}
+                >
+                  <Icon size={19} color={isActive ? Colors.primary : Colors.textMuted} />
+                  <Text style={[styles.navTabLabel, isActive && styles.navTabLabelActive]}>
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* Server IP Config Modal */}
+          <ServerModal
+            visible={isServerModalOpen}
+            onClose={() => setIsServerModalOpen(false)}
+            onServerSaved={(newUrl) => {
+              setServerUrlState(newUrl);
+              loadInitialData();
+            }}
+          />
+        </KeyboardAvoidingView>
       </SafeAreaView>
     </SafeAreaProvider>
   );
@@ -456,13 +536,13 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: Colors.borderLight,
     paddingVertical: 8,
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
     justifyContent: 'space-around',
   },
   navTab: {
     alignItems: 'center',
     paddingVertical: 4,
-    paddingHorizontal: 12,
+    paddingHorizontal: 8,
     borderRadius: 10,
     gap: 2,
   },
@@ -470,7 +550,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.lilacSubtle,
   },
   navTabLabel: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '600',
     color: Colors.textMuted,
   },

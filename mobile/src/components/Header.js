@@ -1,13 +1,15 @@
 import React from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity } from 'react-native';
 import { Colors } from '../theme/colors';
-import { Settings, ShieldCheck, ShieldAlert } from 'lucide-react-native';
+import { Settings, ShieldCheck, ShieldAlert, LogOut, User } from 'lucide-react-native';
 
 export default function Header({
   title,
   subtitle,
   backendOnline,
   serverUrl,
+  currentUser,
+  onLogout,
   onOpenSettings,
   onGoHome,
 }) {
@@ -27,6 +29,15 @@ export default function Header({
         </TouchableOpacity>
 
         <View style={styles.actionsRow}>
+          {currentUser && (
+            <View style={styles.userBadge}>
+              <User size={12} color={Colors.primary} />
+              <Text style={styles.userEmailText} numberOfLines={1}>
+                {currentUser.full_name || currentUser.email?.split('@')[0]}
+              </Text>
+            </View>
+          )}
+
           <TouchableOpacity
             style={[styles.statusBadge, backendOnline ? styles.statusOnline : styles.statusOffline]}
             onPress={onOpenSettings}
@@ -54,8 +65,19 @@ export default function Header({
             activeOpacity={0.7}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Settings size={18} color={Colors.primary} />
+            <Settings size={17} color={Colors.primary} />
           </TouchableOpacity>
+
+          {currentUser && onLogout && (
+            <TouchableOpacity
+              style={styles.logoutButton}
+              onPress={onLogout}
+              activeOpacity={0.7}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <LogOut size={16} color={Colors.dangerText} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -110,15 +132,30 @@ const styles = StyleSheet.create({
   actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
   },
-  statusBadge: {
+  userBadge: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: Colors.lilacSubtle,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
     gap: 4,
+    maxWidth: 90,
+  },
+  userEmailText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.primary,
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 3,
     borderWidth: 1,
   },
   statusOnline: {
@@ -143,6 +180,11 @@ const styles = StyleSheet.create({
     padding: 6,
     borderRadius: 8,
     backgroundColor: Colors.lilacSubtle,
+  },
+  logoutButton: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: Colors.dangerLight,
   },
   screenHeader: {
     marginTop: 10,

@@ -3,15 +3,15 @@
 Endpoints for face registration, recognition, and AI-generated image detection.
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Header, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 import os
 import tempfile
 import sys
 import cv2
 import numpy as np
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
@@ -21,9 +21,11 @@ import config
 from core.encoder import generate_frame_embeddings, preload_models
 from core.face_index import FaceIndex
 from core.ai_detector import AIImageDetector
-from db.database import DatabaseManager
+from db.postgres_manager import DatabaseManager
 from core.video_processor import extract_video_metadata, sample_video_frames
 from core.metadata_analyzer import MetadataAnalyzer
+from core.security import hash_password, verify_password, create_access_token, decode_access_token
+from core.email_service import send_report_email
 
 app = FastAPI(
     title="SWARAKSHA API",
@@ -40,9 +42,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Global instances (initialized on startup) ──────────────────────────────
+# ── Global instances ─────────────────────────────────────────────────────────
 
-db: DatabaseManager = None
+db: DatabaseManager = DatabaseManager()
 face_index: FaceIndex = None
 ai_detector: AIImageDetector = None
 metadata_analyzer: MetadataAnalyzer = None
@@ -56,7 +58,8 @@ async def startup_event():
 
     # 1. Database
     print("[SWARAKSHA] Initializing database...")
-    db = DatabaseManager()
+    if db is None:
+        db = DatabaseManager()
     persons = db.list_persons()
     print(f"  ✓ Database ready — {len(persons)} registered person(s)")
 
@@ -104,6 +107,44 @@ def _decode_base64_image(b64_str: str):
 
 
 # ── Response & Request Models ───────────────────────────────────────────────
+
+class RegisterUserRequest(BaseModel):
+    email: str
+    password: str
+    full_name: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class UserProfileResponse(BaseModel):
+    id: int
+    email: str
+    full_name: Optional[str] = None
+    created_at: Optional[str] = None
+    last_login: Optional[str] = None
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserProfileResponse
+
+
+class ScanReportResponse(BaseModel):
+    id: int
+    user_id: Optional[int] = None
+    user_email: Optional[str] = None
+    report_type: str
+    action_verdict: str
+    summary: str
+    details: dict
+    email_sent: bool
+    email_sent_at: Optional[str] = None
+    created_at: Optional[str] = None
+
 
 class RegisterBase64Request(BaseModel):
     person_id: str
@@ -216,7 +257,182 @@ class VideoScanDetailedResponse(BaseModel):
     metadata_forensics: Optional[dict] = None
 
 
-# ── Endpoints ───────────────────────────────────────────────────────────────
+# ── Auth & Security Helpers ──────────────────────────────────────────────────
+
+def get_current_user_optional(authorization: Optional[str] = Header(None)) -> Optional[Dict[str, Any]]:
+    """Extracts logged in user from Bearer JWT token if provided."""
+    if not authorization:
+        return None
+    try:
+        parts = authorization.split()
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            token = parts[1]
+            payload = decode_access_token(token)
+            if payload and "sub" in payload:
+                user = db.get_user_by_email(payload["sub"])
+                return user
+    except Exception as e:
+        print(f"[AUTH] Error verifying token: {e}")
+    return None
+
+
+def _save_and_dispatch_report(
+    report_type: str,
+    action_verdict: str,
+    summary: str,
+    details: dict,
+    user: Optional[dict] = None,
+    user_email_override: Optional[str] = None,
+    background_tasks: Optional[BackgroundTasks] = None
+):
+    """Saves scan report to database and schedules email delivery."""
+    try:
+        user_id = user["id"] if user else None
+        target_email = user_email_override or (user["email"] if user else None)
+
+        report = db.create_scan_report(
+            report_type=report_type,
+            action_verdict=action_verdict,
+            summary=summary,
+            details=details,
+            user_id=user_id,
+            user_email=target_email,
+            email_sent=False
+        )
+
+        if target_email and background_tasks:
+            def _dispatch():
+                sent = send_report_email(target_email, report)
+                if sent:
+                    db.mark_report_email_sent(report["id"])
+
+            background_tasks.add_task(_dispatch)
+    except Exception as e:
+        print(f"[REPORT] Error recording and dispatching scan report: {e}")
+
+
+# ── Auth & Report Endpoints ─────────────────────────────────────────────────
+
+@app.post("/api/auth/register", response_model=AuthResponse)
+async def register_user(req: RegisterUserRequest):
+    """
+    Register a new user account with email and password in PostgreSQL.
+    """
+    if not req.email or "@" not in req.email:
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
+    if not req.password or len(req.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long.")
+
+    existing = db.get_user_by_email(req.email)
+    if existing:
+        raise HTTPException(status_code=400, detail="An account with this email already exists.")
+
+    pw_hash = hash_password(req.password)
+    user = db.create_user(req.email, pw_hash, req.full_name)
+
+    token = create_access_token({"sub": user["email"], "uid": user["id"]})
+    return AuthResponse(
+        access_token=token,
+        token_type="bearer",
+        user=UserProfileResponse(
+            id=user["id"],
+            email=user["email"],
+            full_name=user.get("full_name"),
+            created_at=user.get("created_at"),
+            last_login=None
+        )
+    )
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+async def login_user(req: LoginRequest):
+    """
+    Authenticate a user with email and password.
+    """
+    user = db.get_user_by_email(req.email)
+    if not user or not verify_password(req.password, user["password_hash"]):
+        db.log_audit(None, "LOGIN_FAILED", details=f"Failed login attempt for {req.email}")
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=403, detail="Account is disabled.")
+
+    db.update_user_last_login(user["id"])
+    db.log_audit(user["id"], "LOGIN_SUCCESS", details=f"User {user['email']} logged in successfully")
+
+    token = create_access_token({"sub": user["email"], "uid": user["id"]})
+    return AuthResponse(
+        access_token=token,
+        token_type="bearer",
+        user=UserProfileResponse(
+            id=user["id"],
+            email=user["email"],
+            full_name=user.get("full_name"),
+            created_at=user.get("created_at"),
+            last_login=user.get("last_login")
+        )
+    )
+
+
+@app.get("/api/auth/me", response_model=UserProfileResponse)
+async def get_my_profile(user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
+    """
+    Get current logged in user profile.
+    """
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return UserProfileResponse(
+        id=user["id"],
+        email=user["email"],
+        full_name=user.get("full_name"),
+        created_at=user.get("created_at"),
+        last_login=user.get("last_login")
+    )
+
+
+@app.get("/api/reports", response_model=List[ScanReportResponse])
+async def list_reports(
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+    email: Optional[str] = None
+):
+    """
+    Get scan report history for the logged in user or query email.
+    """
+    user_id = user["id"] if user else None
+    target_email = email or (user["email"] if user else None)
+
+    reports = db.get_user_reports(user_id=user_id, user_email=target_email, limit=50)
+    return [ScanReportResponse(**r) for r in reports]
+
+
+@app.post("/api/reports/{report_id}/resend-email")
+async def resend_report_email(
+    report_id: int,
+    background_tasks: BackgroundTasks,
+    to_email: Optional[str] = None,
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
+):
+    """
+    Resends a forensic scan report to the user's email address.
+    """
+    report = db.get_report_by_id(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found.")
+
+    target_email = to_email or report.get("user_email") or (user["email"] if user else None)
+    if not target_email:
+        raise HTTPException(status_code=400, detail="Recipient email address is required.")
+
+    def _send_and_mark():
+        success = send_report_email(target_email, report)
+        if success:
+            db.mark_report_email_sent(report_id)
+
+    background_tasks.add_task(_send_and_mark)
+    return {"message": f"Report #{report_id} email dispatch queued to {target_email}."}
+
+
+# ── Core AI Endpoints ───────────────────────────────────────────────────────
 
 @app.get("/")
 def health_check():
@@ -224,6 +440,7 @@ def health_check():
     return {
         "status": "SWARAKSHA API is running",
         "version": "2.0.0",
+        "database": "PostgreSQL" if getattr(db, 'is_postgres', False) else "SQLite",
         "registered_persons": len(db.list_persons()) if db else 0,
         "total_embeddings": face_index.total_embeddings if face_index else 0,
     }
@@ -234,6 +451,7 @@ async def register_person(
     person_id: str = Form(...),
     name: str = Form(...),
     files: List[UploadFile] = File(...),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)
 ):
     """
     Register a person's identity by uploading one or more face photos.
@@ -242,10 +460,13 @@ async def register_person(
     if not files:
         raise HTTPException(status_code=400, detail="At least one image file is required.")
 
+    user_id = user["id"] if user else None
+
     # Create person in database (or skip if already exists)
     try:
-        db.add_person(person_id, name)
+        db.add_person(person_id, name, user_id=user_id)
     except ValueError:
+        pass
         # Person already exists — we'll just add more images
         pass
 
@@ -465,7 +686,12 @@ def _scan_frame(img: np.ndarray) -> ScanResponse:
 
 
 @app.post("/api/scan", response_model=ScanResponse)
-async def scan_image(file: UploadFile = File(...)):
+async def scan_image(
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+    user_email: Optional[str] = Header(None)
+):
     """Scan one uploaded image for protected identities and manipulation."""
     contents = await file.read()
     img = _decode_image(contents)
@@ -488,11 +714,27 @@ async def scan_image(file: UploadFile = File(...)):
     except Exception as e:
         print(f"[METADATA] Error during metadata analysis: {e}")
 
+    # Auto-save report & dispatch email in background
+    _save_and_dispatch_report(
+        report_type="FACE_SCAN",
+        action_verdict=result.overall_action,
+        summary=result.summary,
+        details=result.dict(),
+        user=user,
+        user_email_override=user_email,
+        background_tasks=background_tasks
+    )
+
     return result
 
 
 @app.post("/api/scan-base64", response_model=ScanResponse)
-async def scan_image_base64(req: ScanBase64Request):
+async def scan_image_base64(
+    req: ScanBase64Request,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+    user_email: Optional[str] = Header(None)
+):
     """Scan base64 image for protected identities and AI manipulation."""
     contents, img = _decode_base64_image(req.image)
     result = _scan_frame(img)
@@ -508,6 +750,17 @@ async def scan_image_base64(req: ScanBase64Request):
                 result.summary += " ⚠️ Metadata forensics detected strong AI-generation markers."
     except Exception as e:
         print(f"[METADATA] Error during base64 metadata analysis: {e}")
+
+    # Auto-save report & dispatch email in background
+    _save_and_dispatch_report(
+        report_type="FACE_SCAN",
+        action_verdict=result.overall_action,
+        summary=result.summary,
+        details=result.dict(),
+        user=user,
+        user_email_override=user_email,
+        background_tasks=background_tasks
+    )
 
     return result
 
@@ -709,7 +962,12 @@ def _process_video_file(temp_path: str, filename: str) -> VideoScanDetailedRespo
 
 
 @app.post("/api/scan-video", response_model=VideoScanDetailedResponse)
-async def scan_video(file: UploadFile = File(...)):
+async def scan_video(
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+    user_email: Optional[str] = Header(None)
+):
     """Sample an uploaded video and scan each sampled frame."""
     filename = file.filename or "upload.mp4"
     suffix = os.path.splitext(filename)[1]
@@ -722,14 +980,32 @@ async def scan_video(file: UploadFile = File(...)):
             temp_file.write(await file.read())
             temp_path = temp_file.name
 
-        return _process_video_file(temp_path, filename)
+        result = _process_video_file(temp_path, filename)
+
+        # Auto-save report & dispatch email in background
+        _save_and_dispatch_report(
+            report_type="VIDEO_SCAN",
+            action_verdict=result.final_status,
+            summary=result.summary,
+            details=result.dict(),
+            user=user,
+            user_email_override=user_email,
+            background_tasks=background_tasks
+        )
+
+        return result
     finally:
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
 
 @app.post("/api/scan-video-base64", response_model=VideoScanDetailedResponse)
-async def scan_video_base64(req: ScanVideoBase64Request):
+async def scan_video_base64(
+    req: ScanVideoBase64Request,
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+    user_email: Optional[str] = Header(None)
+):
     """Scan base64-encoded video (ideal for mobile clients)."""
     b64_str = req.video
     if "," in b64_str:
@@ -747,7 +1023,20 @@ async def scan_video_base64(req: ScanVideoBase64Request):
             temp_file.write(video_bytes)
             temp_path = temp_file.name
 
-        return _process_video_file(temp_path, filename)
+        result = _process_video_file(temp_path, filename)
+
+        # Auto-save report & dispatch email in background
+        _save_and_dispatch_report(
+            report_type="VIDEO_SCAN",
+            action_verdict=result.final_status,
+            summary=result.summary,
+            details=result.dict(),
+            user=user,
+            user_email_override=user_email,
+            background_tasks=background_tasks
+        )
+
+        return result
     finally:
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
