@@ -23,6 +23,7 @@ import {
   UserCheck,
   UserX,
   Sparkles,
+  Mail,
 } from 'lucide-react-native';
 import BackButton from '../components/BackButton';
 import MetadataPanel from '../components/MetadataPanel';
