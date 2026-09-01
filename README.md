@@ -1,4 +1,4 @@
-# 🛡️ SWARAKSHA (v2.5) — Sovereign Biometric Provenance & Autonomous Deepfake Cyber Defense
+#  SWARAKSHA  
 
 **SWARAKSHA** is a local-first, zero-trust biometric cyber-defense platform designed to safeguard human facial identities against unauthorized generative synthesis, deepfakes, and algorithmic impersonation.
 
@@ -6,7 +6,7 @@ The platform combines high-dimensional geometric facial embeddings (**ArcFace + 
 
 ---
 
-## ⚡ Key Capabilities
+##  Key Capabilities
 
 - **Multi-Pose Identity Enrollment:** Register protected identities with 5+ photos across various lighting conditions and angles with multi-threaded parallel extraction.
 - **Live Facial Protection & AI Scan:** Instant detection of identity matches with concurrent deepfake classification and metadata forensics (`ALLOW` vs `BLOCK` verdict).
@@ -18,7 +18,7 @@ The platform combines high-dimensional geometric facial embeddings (**ArcFace + 
 
 ---
 
-## 🏗️ Runtime Architecture
+##  Runtime Architecture
 
 ```text
        ┌─────────────────────────────────────────────────────────┐
@@ -52,7 +52,7 @@ The platform combines high-dimensional geometric facial embeddings (**ArcFace + 
 
 ---
 
-## 📋 Prerequisites & System Requirements
+##  Prerequisites & System Requirements
 
 ### 1. Backend Engine
 - **Operating System:** Windows 10/11, macOS, or Linux
@@ -71,7 +71,7 @@ The platform combines high-dimensional geometric facial embeddings (**ArcFace + 
 
 ---
 
-## 🚀 Quick Start Guide
+##  Quick Start Guide
 
 ### Step 1: Clone and Configure Environment
 
@@ -274,6 +274,3 @@ Swaraksha/
 
 ---
 
-## 📄 License
-
-This project is licensed under the **MIT License**.
