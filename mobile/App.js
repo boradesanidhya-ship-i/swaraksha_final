@@ -318,7 +318,12 @@ export default function App() {
 
       try {
         const res = await scanVideoFile(vf.uri, vf.name);
-        results.push({ file: vf, data: res });
+        results.push({
+          file: vf,
+          fileName: vf.name || vf.fileName || 'Video Analysis',
+          data: res,
+          ...res,
+        });
         log(`Video [${vf.name}]: ${res.final_status} (${res.video?.sampled_frames || 0} frames)`);
         if (currentUser?.email) {
           log(`Video analysis report dispatched to ${currentUser.email}`);
@@ -327,6 +332,8 @@ export default function App() {
         log(`Video [${vf.name}] error: ${err.message}`);
         results.push({
           file: vf,
+          fileName: vf.name || vf.fileName || 'Video Error',
+          final_status: 'ERROR',
           error: err.response?.data?.detail || err.message || 'Scan failed',
         });
       }

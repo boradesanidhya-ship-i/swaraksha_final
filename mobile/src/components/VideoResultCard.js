@@ -6,26 +6,31 @@ import TimelineTrack from './TimelineTrack';
 import MetadataPanel from './MetadataPanel';
 
 export default function VideoResultCard({ result }) {
-  if (result.final_status === 'ERROR' || !result.video) {
+  // Unwrap if wrapped in { file, data, error }
+  const data = result?.data || result;
+  const fileName = result?.file?.name || result?.file?.fileName || result?.fileName || data?.fileName || 'Video Analysis';
+  const hasError = !!result?.error || data?.final_status === 'ERROR' || !data?.video;
+
+  if (hasError) {
     return (
       <View style={[styles.card, styles.cardError]}>
         <View style={styles.header}>
           <View style={styles.titleRow}>
             <FileVideo size={18} color={Colors.dangerText} />
-            <Text style={styles.fileName}>{result.fileName || 'Video Error'}</Text>
+            <Text style={styles.fileName}>{fileName}</Text>
           </View>
           <View style={[styles.badge, styles.badgeDanger]}>
             <Text style={styles.badgeTextDanger}>ERROR</Text>
           </View>
         </View>
         <Text style={styles.errorSummary}>
-          {result.summary || 'The backend could not process this video.'}
+          {result?.error || data?.summary || 'The backend could not process this video.'}
         </Text>
       </View>
     );
   }
 
-  const { video, identity, ai_analysis, final_status, frames, summary, metadata_forensics } = result;
+  const { video, identity, ai_analysis, final_status, frames, summary, metadata_forensics } = data;
   const isDanger = final_status === 'POTENTIAL_AI_MANIPULATION';
   const isReview = final_status === 'REVIEW_REQUIRED';
   const personNames = identity?.person_ids?.length ? identity.person_ids.join(', ') : 'None';
@@ -36,7 +41,7 @@ export default function VideoResultCard({ result }) {
         <View style={styles.titleRow}>
           <FileVideo size={18} color={Colors.primary} />
           <Text style={styles.fileName} numberOfLines={1}>
-            {result.fileName}
+            {fileName}
           </Text>
         </View>
         <View
@@ -59,7 +64,7 @@ export default function VideoResultCard({ result }) {
                 : styles.badgeTextSuccess,
             ]}
           >
-            {final_status.replace(/_/g, ' ')}
+            {(final_status || 'ANALYSIS COMPLETE').replace(/_/g, ' ')}
           </Text>
         </View>
       </View>
@@ -75,7 +80,7 @@ export default function VideoResultCard({ result }) {
         <View style={styles.statRow}>
           <Text style={styles.statLabel}>Identity Match Ratio:</Text>
           <Text style={styles.statValue}>
-            {identity.protected_identity_detected
+            {identity?.protected_identity_detected
               ? `${Math.round((identity.identity_frame_ratio || 0) * 100)}% of frames`
               : 'No match'}
           </Text>
@@ -83,7 +88,7 @@ export default function VideoResultCard({ result }) {
         <View style={styles.statRow}>
           <Text style={styles.statLabel}>Identity Frames:</Text>
           <Text style={styles.statValue}>
-            {identity.frames_with_identity || 0} / {video.sampled_frames || 0}
+            {identity?.frames_with_identity || 0} / {video?.sampled_frames || 0}
           </Text>
         </View>
         <View style={styles.statRow}>
@@ -91,45 +96,22 @@ export default function VideoResultCard({ result }) {
           <Text
             style={[
               styles.statValue,
-              ai_analysis.frames_flagged > 0 ? styles.valAlert : null,
+              ai_analysis?.frames_flagged > 0 ? styles.valAlert : null,
             ]}
           >
-            {ai_analysis.frames_flagged || 0} / {ai_analysis.frames_analyzed || 0}
+            {ai_analysis?.frames_flagged || 0} / {ai_analysis?.frames_analyzed || 0}
           </Text>
         </View>
       </View>
 
-      {/* Overall Status Banner */}
-      <View
-        style={[
-          styles.overallBanner,
-          isDanger ? styles.bannerDanger : styles.bannerSafe,
-        ]}
-      >
-        <View style={styles.bannerRow}>
-          {isDanger ? (
-            <ShieldAlert size={18} color={Colors.dangerText} />
-          ) : (
-            <ShieldCheck size={18} color={Colors.successText} />
-          )}
-          <Text
-            style={[
-              styles.bannerTitle,
-              isDanger ? styles.textDanger : styles.textSafe,
-            ]}
-          >
-            {isDanger ? 'POTENTIAL AI MANIPULATION' : 'NO THREAT DETECTED'}
-          </Text>
-        </View>
-        <Text style={styles.bannerSub}>Status: {final_status.replace(/_/g, ' ')}</Text>
-      </View>
+      {/* Visual Timeline Track */}
+      {frames && frames.length > 0 && (
+        <TimelineTrack frames={frames} duration={video?.duration || 0} />
+      )}
 
-      {/* Frame Timeline Track */}
-      {frames && <TimelineTrack frames={frames} />}
-
-      {/* Video Metadata Forensics */}
+      {/* Metadata Forensics Section */}
       {metadata_forensics && (
-        <MetadataPanel meta={metadata_forensics} title="Video Container Forensics" />
+        <MetadataPanel meta={metadata_forensics} title="Video Metadata Forensics" />
       )}
     </View>
   );
@@ -140,7 +122,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderRadius: 16,
     padding: 16,
-    marginBottom: 16,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: Colors.borderLight,
     ...Shadows.sm,
@@ -153,7 +135,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   titleRow: {
     flexDirection: 'row',
@@ -166,35 +148,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: Colors.text,
-    flex: 1,
   },
   badge: {
     paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingVertical: 3,
     borderRadius: 8,
-  },
-  badgeDanger: {
-    backgroundColor: Colors.dangerLight,
-    borderWidth: 1,
-    borderColor: Colors.dangerBorder,
   },
   badgeSuccess: {
     backgroundColor: Colors.successLight,
-    borderWidth: 1,
-    borderColor: Colors.successBorder,
   },
   badgeWarning: {
     backgroundColor: Colors.warningLight,
-    borderWidth: 1,
-    borderColor: Colors.warningBorder,
+  },
+  badgeDanger: {
+    backgroundColor: Colors.dangerLight,
   },
   badgeText: {
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.5,
-  },
-  badgeTextDanger: {
-    color: Colors.dangerText,
   },
   badgeTextSuccess: {
     color: Colors.successText,
@@ -202,15 +174,19 @@ const styles = StyleSheet.create({
   badgeTextWarning: {
     color: Colors.warningText,
   },
+  badgeTextDanger: {
+    color: Colors.dangerText,
+  },
   summaryText: {
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.textSecondary,
-    marginBottom: 12,
+    marginBottom: 14,
     lineHeight: 18,
   },
   errorSummary: {
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.dangerText,
+    lineHeight: 16,
   },
   statsGrid: {
     backgroundColor: Colors.surfaceSubtle,
@@ -222,52 +198,17 @@ const styles = StyleSheet.create({
   statRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
   },
   statLabel: {
-    fontSize: 12,
-    color: Colors.textSecondary,
+    fontSize: 11,
+    color: Colors.textMuted,
   },
   statValue: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: Colors.text,
   },
   valAlert: {
     color: Colors.dangerText,
-  },
-  overallBanner: {
-    borderRadius: 10,
-    padding: 12,
-    borderLeftWidth: 4,
-  },
-  bannerDanger: {
-    backgroundColor: Colors.dangerLight,
-    borderLeftColor: Colors.danger,
-  },
-  bannerSafe: {
-    backgroundColor: Colors.lilacSubtle,
-    borderLeftColor: Colors.primary,
-  },
-  bannerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  bannerTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  textDanger: {
-    color: Colors.dangerText,
-  },
-  textSafe: {
-    color: Colors.primaryDark,
-  },
-  bannerSub: {
-    fontSize: 11,
-    color: Colors.textSecondary,
-    marginTop: 4,
   },
 });
