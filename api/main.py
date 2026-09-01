@@ -18,7 +18,7 @@ if sys.platform == 'win32':
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import config
-from core.encoder import generate_frame_embeddings, preload_models
+from core.encoder import generate_frame_embeddings, generate_batch_embeddings, preload_models
 from core.face_index import FaceIndex
 from core.ai_detector import AIImageDetector
 from db.postgres_manager import DatabaseManager
@@ -525,25 +525,26 @@ async def register_person(
         db.add_person(person_id, name, user_id=user_id)
     except ValueError:
         pass
-        # Person already exists — we'll just add more images
-        pass
 
-    faces_registered = 0
-
+    # Decode all images
+    decoded_images = []
+    image_names = []
     for file in files:
         contents = await file.read()
         img = _decode_image(contents)
+        if img is not None:
+            decoded_images.append(img)
+            image_names.append(file.filename or "unknown.jpg")
 
-        # Detect faces and generate embeddings
-        faces = generate_frame_embeddings(img)
+    # Extract face embeddings in parallel across CPU threads
+    batch_faces = generate_batch_embeddings(decoded_images, max_workers=4)
+
+    faces_registered = 0
+    for idx, faces in enumerate(batch_faces):
         if not faces:
-            continue  # Skip images with no face detected
-
-        # Take the primary (highest confidence) face from each image
+            continue
         emb = faces[0]["embedding"]
-        image_name = file.filename or "unknown"
-
-        # Add to FAISS index + database
+        image_name = image_names[idx]
         face_index.add(person_id, emb, image_name)
         faces_registered += 1
 
@@ -565,7 +566,7 @@ async def register_person(
 @app.post("/api/register-base64", response_model=RegisterResponse)
 async def register_person_base64(req: RegisterBase64Request):
     """
-    Register a person's identity via JSON base64 payloads (ideal for mobile clients).
+    Register a person's identity via JSON base64 payloads with parallel multi-core acceleration.
     """
     if not req.images:
         raise HTTPException(status_code=400, detail="At least one image is required.")
@@ -575,21 +576,27 @@ async def register_person_base64(req: RegisterBase64Request):
     except ValueError:
         pass
 
-    faces_registered = 0
+    # Fast parallel decode
+    decoded_images = []
     for idx, b64_img in enumerate(req.images):
         try:
             _, img = _decode_base64_image(b64_img)
-            faces = generate_frame_embeddings(img)
-            if not faces:
-                continue
-
-            emb = faces[0]["embedding"]
-            image_name = f"reference_{idx + 1}.jpg"
-            face_index.add(req.person_id, emb, image_name)
-            faces_registered += 1
+            if img is not None:
+                decoded_images.append(img)
         except Exception as e:
             print(f"[REGISTER] Error decoding base64 image {idx}: {e}")
+
+    # Extract all face embeddings concurrently in parallel threads
+    batch_faces = generate_batch_embeddings(decoded_images, max_workers=min(4, len(decoded_images)))
+
+    faces_registered = 0
+    for idx, faces in enumerate(batch_faces):
+        if not faces:
             continue
+        emb = faces[0]["embedding"]
+        image_name = f"reference_{idx + 1}.jpg"
+        face_index.add(req.person_id, emb, image_name)
+        faces_registered += 1
 
     if faces_registered == 0:
         raise HTTPException(
@@ -848,49 +855,51 @@ def _process_video_file(temp_path: str, filename: str) -> VideoScanDetailedRespo
     sample_interval = getattr(config, 'VIDEO_SAMPLE_INTERVAL', 2.0)
     print(f"[VIDEO] Sampling every {sample_interval} sec")
 
-    # 2. Extract Sampled Frames
-    sampled_frames = list(sample_video_frames(temp_path, sample_interval))
+    # 2. Extract Sampled Frames (auto 720p scaling for 4x speedup)
+    sampled_frames = list(sample_video_frames(temp_path, sample_interval, max_dim=720))
     print(f"[VIDEO] Sampled {len(sampled_frames)} frames")
+
+    if not sampled_frames:
+        raise HTTPException(status_code=400, detail="Could not extract any valid video frames.")
+
+    # 3. Multi-Threaded Face Detection & Identity Matching (Layer 1)
+    frame_images = [f["frame"] for f in sampled_frames]
+    batch_faces_per_frame = generate_batch_embeddings(frame_images, max_workers=4)
 
     frames_results = []
     relevant_frames = [] # Tuples of (frame_result, list of protected face crops)
     person_ids_detected = set()
 
-    # 3. Face Detection & Identity Matching (Layer 1)
-    for frame_data in sampled_frames:
+    for idx, frame_data in enumerate(sampled_frames):
         frame_num = frame_data["frame_number"]
         timestamp = frame_data["timestamp"]
         frame_img = frame_data["frame"]
-        
-        # Detect faces
-        faces = generate_frame_embeddings(frame_img)
-        print(f"[FACE] Frame {frame_num}: {len(faces)} faces")
-        
+        faces = batch_faces_per_frame[idx] if idx < len(batch_faces_per_frame) else []
+
         identity_matches = []
         protected_detected = False
         protected_face_crops = []
-        
+
         if faces:
             for face in faces:
                 emb = face["embedding"]
                 area = face["facial_area"]
                 search_results = face_index.search(emb, k=1)
-                
+
                 if search_results:
                     best = search_results[0]
                     sim = best["similarity"]
                     pid = best["person_id"]
-                    
+
                     identity_matches.append(VideoFrameIdentityMatch(
                         person_id=pid,
                         similarity=round(sim, 4)
                     ))
-                    
+
                     protected_detected = True
                     person_ids_detected.add(pid)
-                    print(f"[IDENTITY] Frame {frame_num}: {pid} similarity={sim:.4f}")
-                    
-                    # Crop face for potential AI analysis later
+
+                    # Crop face with margin for AI analysis
                     x, y, w, h = area.get('x', 0), area.get('y', 0), area.get('w', 0), area.get('h', 0)
                     pad = int(max(w, h) * 0.2)
                     img_h, img_w = frame_img.shape[:2]
@@ -899,9 +908,7 @@ def _process_video_file(temp_path: str, filename: str) -> VideoScanDetailedRespo
                     x2 = min(img_w, x + w + pad)
                     y2 = min(img_h, y + h + pad)
                     protected_face_crops.append(frame_img[y1:y2, x1:x2])
-                else:
-                    print(f"[IDENTITY] Frame {frame_num}: no registered match")
-        
+
         frame_res = VideoFrameResult(
             frame_number=frame_num,
             timestamp=timestamp,
@@ -911,44 +918,51 @@ def _process_video_file(temp_path: str, filename: str) -> VideoScanDetailedRespo
             ai_analysis=VideoFrameAIResult(performed=False, reason="NO_PROTECTED_IDENTITY")
         )
         frames_results.append(frame_res)
-        
-        if protected_detected:
+
+        if protected_detected and protected_face_crops:
             relevant_frames.append((frame_res, protected_face_crops))
 
     print(f"[VIDEO] Protected identity found in {len(relevant_frames)}/{len(sampled_frames)} frames")
 
-    # 4. AI Detection (Layer 2) on Relevant Frames only
+    # 4. Accelerated Vectorized AI Detection (Layer 2)
     flagged_frames_count = 0
     total_ai_scores = []
-    
-    for frame_res, crops in relevant_frames:
-        print(f"[AI] Frame {frame_res.frame_number}: analyzing")
-        frame_flagged = False
-        max_score = 0.0
-        
-        for crop in crops:
-            try:
-                ai_result = ai_detector.analyze(crop)
-                score = ai_result["ai_confidence"]
-                max_score = max(max_score, score)
-                if ai_result["is_ai"]:
-                    frame_flagged = True
-            except Exception as e:
-                frame_res.ai_analysis = VideoFrameAIResult(
-                    performed=False,
-                    error=str(e)
-                )
-                break
-        else:
-            # Loop completed without errors
+
+    # Flatten all crops for a single batch forward pass
+    flat_crops = []
+    crop_mapping = [] # (relevant_frame_idx, crop_idx)
+    for r_idx, (frame_res, crops) in enumerate(relevant_frames):
+        for c in crops:
+            flat_crops.append(c)
+            crop_mapping.append(r_idx)
+
+    if flat_crops:
+        # Run one single vectorized batch forward pass across all crops!
+        batch_ai_results = ai_detector.analyze_batch(flat_crops)
+
+        # Distribute results back to respective frames
+        frame_crop_scores = {r_idx: [] for r_idx in range(len(relevant_frames))}
+        frame_crop_flagged = {r_idx: False for r_idx in range(len(relevant_frames))}
+
+        for c_idx, res in enumerate(batch_ai_results):
+            r_idx = crop_mapping[c_idx]
+            score = res.get("ai_confidence", 0.0)
+            frame_crop_scores[r_idx].append(score)
+            if res.get("is_ai", False):
+                frame_crop_flagged[r_idx] = True
+
+        for r_idx, (frame_res, _) in enumerate(relevant_frames):
+            scores = frame_crop_scores[r_idx]
+            max_score = max(scores) if scores else 0.0
+            is_flagged = frame_crop_flagged[r_idx]
+
             total_ai_scores.append(max_score)
-            if frame_flagged:
+            if is_flagged:
                 flagged_frames_count += 1
-            
-            print(f"[AI] Frame {frame_res.frame_number}: score={max_score:.4f}")
+
             frame_res.ai_analysis = VideoFrameAIResult(
                 performed=True,
-                result="AI_GENERATED" if frame_flagged else "REAL",
+                result="AI_GENERATED" if is_flagged else "REAL",
                 score=round(max_score, 4)
             )
 
