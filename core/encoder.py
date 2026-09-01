@@ -205,7 +205,18 @@ def preload_models():
     Call this once at application startup to avoid first-frame latency.
     """
     print("[SWARAKSHA] Pre-loading face detection models...")
-    DeepFace.build_model(config.FACE_MODEL)
-    print(f"  ✓ {config.FACE_MODEL} model loaded")
-    print(f"  ✓ Detector backend: {config.DETECTOR_BACKEND}")
+    try:
+        DeepFace.build_model(config.FACE_MODEL)
+        print(f"  ✓ {config.FACE_MODEL} model loaded")
+    except Exception as e:
+        print(f"  ✗ Error loading {config.FACE_MODEL}: {e}")
+
+    # Warm up detector backends with dummy image to avoid runtime downloads
+    try:
+        dummy = np.zeros((112, 112, 3), dtype=np.uint8)
+        DeepFace.represent(img_path=dummy, model_name=config.FACE_MODEL, detector_backend=config.DETECTOR_BACKEND, enforce_detection=False)
+        print(f"  ✓ Detector backend: {config.DETECTOR_BACKEND} (warmed)")
+    except Exception as e:
+        print(f"  [NOTICE] Detector warm-up: {e}")
+
     print("[SWARAKSHA] Models ready.")

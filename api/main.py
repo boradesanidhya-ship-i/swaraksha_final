@@ -837,10 +837,11 @@ def _process_video_file(temp_path: str, filename: str) -> VideoScanDetailedRespo
     # 0. Metadata Forensics on the video file
     video_meta_forensics = None
     try:
-        video_meta_forensics = metadata_analyzer.analyze_video_file(temp_path)
-        print(f"[METADATA] Video scan: {video_meta_forensics['confidence']} confidence, {len(video_meta_forensics['flags'])} flag(s)")
-        for flag in video_meta_forensics['flags']:
-            print(f"  → {flag}")
+        if metadata_analyzer is not None:
+            video_meta_forensics = metadata_analyzer.analyze_video_file(temp_path)
+            print(f"[METADATA] Video scan: {video_meta_forensics['confidence']} confidence, {len(video_meta_forensics['flags'])} flag(s)")
+            for flag in video_meta_forensics['flags']:
+                print(f"  → {flag}")
     except Exception as e:
         print(f"[METADATA] Error during video metadata analysis: {e}")
 
