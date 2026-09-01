@@ -15,7 +15,7 @@ import { Server, Wifi, Check, X, Globe, Laptop } from 'lucide-react-native';
 import { checkServerHealth } from '../api/client';
 import { getServerUrl, setServerUrl } from '../utils/storage';
 
-export default function ServerModal({ visible, onClose, onServerSaved }) {
+export default function ServerModal({ visible, onClose, onServerSaved, currentUser, onLogout }) {
   const [urlInput, setUrlInput] = useState('');
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -135,6 +135,28 @@ export default function ServerModal({ visible, onClose, onServerSaved }) {
                       : 'Connection Failed: Could not reach backend server.'}
                   </Text>
                 </View>
+              </View>
+            )}
+
+            {/* Active User Session & Sign Out */}
+            {currentUser && onLogout && (
+              <View style={styles.sessionCard}>
+                <View style={styles.sessionInfo}>
+                  <Text style={styles.sessionLabel}>Logged In User</Text>
+                  <Text style={styles.sessionEmail} numberOfLines={1}>
+                    {currentUser.email}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.sessionLogoutBtn}
+                  onPress={() => {
+                    onClose();
+                    onLogout();
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.sessionLogoutText}>Sign Out</Text>
+                </TouchableOpacity>
               </View>
             )}
 
@@ -281,6 +303,45 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     marginTop: 6,
+  },
+  sessionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+  },
+  sessionInfo: {
+    flex: 1,
+    marginRight: 8,
+  },
+  sessionLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#991B1B',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  sessionEmail: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginTop: 2,
+  },
+  sessionLogoutBtn: {
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  sessionLogoutText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
   },
   testButton: {
     flex: 1,

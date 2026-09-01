@@ -29,24 +29,16 @@ export default function Header({
         </TouchableOpacity>
 
         <View style={styles.actionsRow}>
-          {currentUser && (
-            <View style={styles.userBadge}>
-              <User size={12} color={Colors.primary} />
-              <Text style={styles.userEmailText} numberOfLines={1}>
-                {currentUser.full_name || currentUser.email?.split('@')[0]}
-              </Text>
-            </View>
-          )}
-
+          {/* Status Indicator */}
           <TouchableOpacity
             style={[styles.statusBadge, backendOnline ? styles.statusOnline : styles.statusOffline]}
             onPress={onOpenSettings}
             activeOpacity={0.7}
           >
             {backendOnline ? (
-              <ShieldCheck size={14} color={Colors.successText} />
+              <ShieldCheck size={13} color={Colors.successText} />
             ) : (
-              <ShieldAlert size={14} color={Colors.dangerText} />
+              <ShieldAlert size={13} color={Colors.dangerText} />
             )}
             <Text
               style={[
@@ -59,25 +51,31 @@ export default function Header({
             </Text>
           </TouchableOpacity>
 
+          {/* User Account / Logout Pill */}
+          {currentUser && (
+            <TouchableOpacity
+              style={styles.userBadge}
+              onPress={onLogout}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <User size={12} color={Colors.primary} />
+              <Text style={styles.userEmailText} numberOfLines={1}>
+                {currentUser.full_name || currentUser.email?.split('@')[0]}
+              </Text>
+              <LogOut size={12} color={Colors.dangerText} style={{ marginLeft: 2 }} />
+            </TouchableOpacity>
+          )}
+
+          {/* Settings Button */}
           <TouchableOpacity
             style={styles.settingsButton}
             onPress={onOpenSettings}
             activeOpacity={0.7}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Settings size={17} color={Colors.primary} />
+            <Settings size={16} color={Colors.primary} />
           </TouchableOpacity>
-
-          {currentUser && onLogout && (
-            <TouchableOpacity
-              style={styles.logoutButton}
-              onPress={onLogout}
-              activeOpacity={0.7}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <LogOut size={16} color={Colors.dangerText} />
-            </TouchableOpacity>
-          )}
         </View>
       </View>
 
@@ -96,9 +94,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: Colors.borderLight,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 14,
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 12,
   },
   topRow: {
     flexDirection: 'row',
@@ -111,20 +109,20 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   logo: {
-    width: 32,
-    height: 32,
+    width: 30,
+    height: 30,
   },
   brandTextContainer: {
     justifyContent: 'center',
   },
   brandTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
     letterSpacing: 0.8,
     color: Colors.primaryDark,
   },
   brandSubtitle: {
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: '500',
     color: Colors.lilac,
     marginTop: -2,
@@ -132,28 +130,30 @@ const styles = StyleSheet.create({
   actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
   },
   userBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.lilacSubtle,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    paddingHorizontal: 7,
+    paddingVertical: 3.5,
     borderRadius: 12,
-    gap: 4,
-    maxWidth: 90,
+    gap: 3,
+    maxWidth: 110,
   },
   userEmailText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: Colors.primary,
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: Colors.dangerText,
   },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 7,
-    paddingVertical: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 3.5,
     borderRadius: 12,
     gap: 3,
     borderWidth: 1,
@@ -167,7 +167,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.dangerBorder,
   },
   statusText: {
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: '600',
   },
   statusTextOnline: {
@@ -177,14 +177,9 @@ const styles = StyleSheet.create({
     color: Colors.dangerText,
   },
   settingsButton: {
-    padding: 6,
+    padding: 5,
     borderRadius: 8,
     backgroundColor: Colors.lilacSubtle,
-  },
-  logoutButton: {
-    padding: 6,
-    borderRadius: 8,
-    backgroundColor: Colors.dangerLight,
   },
   screenHeader: {
     marginTop: 10,

@@ -7,7 +7,7 @@ import os
 from dotenv import load_dotenv
 
 # Load .env file if present
-load_dotenv()
+load_dotenv(override=True)
 
 # === Paths ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

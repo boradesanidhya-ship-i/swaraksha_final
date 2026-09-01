@@ -472,6 +472,7 @@ export default function App() {
             {mode === 'reports' && (
               <ReportsScreen
                 userEmail={currentUser?.email}
+                onLogout={handleLogout}
               />
             )}
           </View>
@@ -506,6 +507,8 @@ export default function App() {
           <ServerModal
             visible={isServerModalOpen}
             onClose={() => setIsServerModalOpen(false)}
+            currentUser={currentUser}
+            onLogout={handleLogout}
             onServerSaved={(newUrl) => {
               setServerUrlState(newUrl);
               loadInitialData();

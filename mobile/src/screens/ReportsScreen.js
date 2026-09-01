@@ -10,10 +10,10 @@ import {
   Alert,
 } from 'react-native';
 import { Colors, Shadows } from '../theme/colors';
-import { FileText, ShieldAlert, ShieldCheck, Mail, Send, RefreshCw, Clock, CheckCircle2, AlertTriangle } from 'lucide-react-native';
+import { FileText, ShieldAlert, ShieldCheck, Mail, Send, RefreshCw, Clock, CheckCircle2, AlertTriangle, LogOut } from 'lucide-react-native';
 import { fetchReportHistory, resendReportEmail, sendTestEmail } from '../api/client';
 
-export default function ReportsScreen({ userEmail, onSelectReport }) {
+export default function ReportsScreen({ userEmail, onLogout, onSelectReport }) {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -85,6 +85,16 @@ export default function ReportsScreen({ userEmail, onSelectReport }) {
             Reports auto-dispatched to: <Text style={styles.emailHighlight}>{userEmail || 'Registered User'}</Text>
           </Text>
         </View>
+        {onLogout && (
+          <TouchableOpacity
+            style={styles.logoutBtn}
+            onPress={onLogout}
+            activeOpacity={0.7}
+          >
+            <LogOut size={13} color={Colors.dangerText} style={{ marginRight: 4 }} />
+            <Text style={styles.logoutBtnText}>Sign Out</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <TouchableOpacity
@@ -266,6 +276,22 @@ const styles = StyleSheet.create({
   emailHighlight: {
     fontWeight: '700',
     color: Colors.primary,
+  },
+  logoutBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    marginLeft: 6,
+  },
+  logoutBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.dangerText,
   },
   testEmailButton: {
     backgroundColor: Colors.primary,
